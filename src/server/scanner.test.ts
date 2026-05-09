@@ -12,17 +12,17 @@ describe('scanner path helpers', () => {
   });
 
   it('canonicalizes common nested tag separators', () => {
-    expect(normalizeTag('Animals > Dogs -> Fido')).toBe('Animals/Dogs/Fido');
-    expect(normalizeTag('Animals|Cats|Miso')).toBe('Animals/Cats/Miso');
+    expect(normalizeTag('Animals > Dogs -> Fido')).toBe('animals/dogs/fido');
+    expect(normalizeTag('Animals|Cats|Miso')).toBe('animals/cats/miso');
   });
 
   it('resolves unique visible child tag labels back to their full hierarchy', () => {
-    const knownTags = ['Animals', 'Animals/Dog', 'Animals/Dog/DogName', 'People/Dog'];
-    expect(resolveKnownTagPath('Dog', ['Animals', 'Animals/Dog', 'Animals/Dog/DogName'])).toBe('Animals/Dog');
-    expect(resolveKnownTagPath('Dog', ['Animals', 'Animals/Dog', 'Dog'])).toBe('Animals/Dog');
-    expect(resolveKnownTagPath('DogName', knownTags)).toBe('Animals/Dog/DogName');
-    expect(resolveKnownTagPath('Animals/Dog', knownTags)).toBe('Animals/Dog');
-    expect(resolveKnownTagPath('Dog', knownTags)).toBe('Dog');
+    const knownTags = ['animals', 'animals/dog', 'animals/dog/dogname', 'people/dog'];
+    expect(resolveKnownTagPath('Dog', ['animals', 'animals/dog', 'animals/dog/dogname'])).toBe('animals/dog');
+    expect(resolveKnownTagPath('DOG', ['animals', 'animals/dog', 'dog'])).toBe('animals/dog');
+    expect(resolveKnownTagPath('DogName', knownTags)).toBe('animals/dog/dogname');
+    expect(resolveKnownTagPath('Animals/Dog', knownTags)).toBe('animals/dog');
+    expect(resolveKnownTagPath('Dog', knownTags)).toBe('dog');
   });
 
   it('matches tag filter expressions with AND, OR, and parentheses', () => {

@@ -202,12 +202,13 @@ export function normalizeTag(value: string): string {
     .replace(/\s*\/\s*/g, '/')
     .replace(/\s+/g, ' ')
     .replace(/^\/+|\/+$/g, '')
-    .trim();
+    .trim()
+    .toLowerCase();
 }
 
 export function filterMedia(query: MediaQuery): MediaItem[] {
   const q = query.q?.trim().toLowerCase();
-  const tags = (query.tags ?? []).map((tag) => normalizeTag(tag).toLowerCase()).filter(Boolean);
+  const tags = (query.tags ?? []).map(normalizeTag).filter(Boolean);
   const tagExpression = query.tagExpression?.trim() ? parseTagExpression(query.tagExpression) : undefined;
   const folder = query.folder ? normalizeSlashes(query.folder) : undefined;
 
@@ -267,7 +268,7 @@ export async function updateTags(request: { ids: string[]; tags: string[]; mode:
         ? normalizedTags
         : request.mode === 'add'
           ? Array.from(new Set([...item.tags, ...normalizedTags]))
-          : item.tags.filter((tag) => !normalizedTags.some((removed) => tagMatchesFilter(removed.toLowerCase(), tag)));
+          : item.tags.filter((tag) => !normalizedTags.some((removed) => tagMatchesFilter(removed, tag)));
     await writeMetadata(absolutePath, { tags: nextTags, description: request.description });
   }
   return scanLibraries();
@@ -352,7 +353,7 @@ export async function removeTagEverywhere(tag: string) {
 
   const changed: string[] = [];
   for (const item of cachedFiles) {
-    const nextTags = item.tags.filter((itemTag) => !tagMatchesFilter(normalizedTag.toLowerCase(), itemTag));
+    const nextTags = item.tags.filter((itemTag) => !tagMatchesFilter(normalizedTag, itemTag));
     if (nextTags.length === item.tags.length) continue;
     const absolutePath = await resolveMediaPath(item.id);
     if (!absolutePath) continue;
@@ -496,7 +497,7 @@ async function addDirectoriesToTree(root: FolderNode, libraryPath: string): Prom
 }
 
 function filterBlacklisted(files: MediaItem[]): MediaItem[] {
-  const blacklist = runtimeConfig.blacklistedTags.map((tag) => normalizeTag(tag).toLowerCase());
+  const blacklist = runtimeConfig.blacklistedTags.map(normalizeTag);
   if (blacklist.length === 0) return files;
   return files.filter((item) => !item.tags.some((tag) => blacklist.some((blocked) => tagMatchesFilter(blocked, tag))));
 }
@@ -507,8 +508,8 @@ function isPathInside(root: string, target: string): boolean {
 }
 
 function tagMatchesFilter(filter: string, itemTag: string): boolean {
-  const normalizedTag = normalizeTag(itemTag).toLowerCase();
-  const normalizedFilter = normalizeTag(filter).toLowerCase();
+  const normalizedTag = normalizeTag(itemTag);
+  const normalizedFilter = normalizeTag(filter);
   if (
     normalizedTag === normalizedFilter ||
     normalizedTag.startsWith(`${normalizedFilter}/`) ||
@@ -573,7 +574,7 @@ function tokenizeTagExpression(expression: string): TagExpressionToken[] {
 
   const pushTag = () => {
     const tag = normalizeTag(buffer);
-    if (tag) tokens.push({ type: 'tag', value: tag.toLowerCase() });
+    if (tag) tokens.push({ type: 'tag', value: tag });
     buffer = '';
   };
 
@@ -637,22 +638,21 @@ function knownTagPaths(catalogTags: string[]): string[] {
 export function resolveKnownTagPath(tag: string, knownTags: string[]): string {
   const normalized = normalizeTag(tag);
   if (!normalized) return '';
-  const normalizedLower = normalized.toLowerCase();
   if (normalized.includes('/')) return normalized;
 
   const hierarchicalLeafMatches = knownTags.filter(
-    (knownTag) => knownTag.includes('/') && knownTag.split('/').at(-1)?.toLowerCase() === normalizedLower,
+    (knownTag) => knownTag.includes('/') && knownTag.split('/').at(-1) === normalized,
   );
   const uniqueHierarchicalLeafMatches = Array.from(
-    new Map(hierarchicalLeafMatches.map((knownTag) => [knownTag.toLowerCase(), knownTag])).values(),
+    new Map(hierarchicalLeafMatches.map((knownTag) => [knownTag, knownTag])).values(),
   );
   if (uniqueHierarchicalLeafMatches.length === 1) return uniqueHierarchicalLeafMatches[0];
 
-  const exact = knownTags.find((knownTag) => knownTag.toLowerCase() === normalizedLower);
+  const exact = knownTags.find((knownTag) => knownTag === normalized);
   if (exact) return exact;
 
-  const leafMatches = knownTags.filter((knownTag) => knownTag.split('/').at(-1)?.toLowerCase() === normalizedLower);
-  const uniqueLeafMatches = Array.from(new Map(leafMatches.map((knownTag) => [knownTag.toLowerCase(), knownTag])).values());
+  const leafMatches = knownTags.filter((knownTag) => knownTag.split('/').at(-1) === normalized);
+  const uniqueLeafMatches = Array.from(new Map(leafMatches.map((knownTag) => [knownTag, knownTag])).values());
   return uniqueLeafMatches.length === 1 ? uniqueLeafMatches[0] : normalized;
 }
 
@@ -660,8 +660,8 @@ function replaceTagPath(tag: string, from: string, to: string): string {
   const normalizedTag = normalizeTag(tag);
   const normalizedFrom = normalizeTag(from);
   const normalizedTo = normalizeTag(to);
-  if (normalizedTag.toLowerCase() === normalizedFrom.toLowerCase()) return normalizedTo;
-  if (normalizedTag.toLowerCase().startsWith(`${normalizedFrom.toLowerCase()}/`)) {
+  if (normalizedTag === normalizedFrom) return normalizedTo;
+  if (normalizedTag.startsWith(`${normalizedFrom}/`)) {
     return `${normalizedTo}${normalizedTag.slice(normalizedFrom.length)}`;
   }
   return normalizedTag;
@@ -691,11 +691,10 @@ function expandTagPathAncestors(tags: string[]): string[] {
 }
 
 function descendantsOfTag(filter: string): string[] {
-  const normalizedFilter = normalizeTag(filter).toLowerCase();
+  const normalizedFilter = normalizeTag(filter);
   return cachedTagCatalog
     .map(normalizeTag)
     .filter(Boolean)
-    .map((tag) => tag.toLowerCase())
     .filter((tag) => tag === normalizedFilter || tag.startsWith(`${normalizedFilter}/`) || tag.split('/').includes(normalizedFilter));
 }
 

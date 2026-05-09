@@ -40,6 +40,8 @@ Environment variables:
 - `BLACKLISTED_TAGS=AI,artist-name`: hides any media with one of these tags.
 - `HIDE_EMPTY_FOLDERS=true`: prunes empty folder branches from the UI.
 - `MAX_UPLOAD_MB=250`: per-file upload limit.
+- `BACKUP_INTERVAL_HOURS=24`: maximum frequency for JSON backup files. The default keeps at most one backup file per day when content changes.
+- `BACKUP_RETENTION_DAYS=90`: removes JSON backup files older than this many days. Use `0` to disable JSON backups.
 - `SCAN_INTERVAL_MS=15000`: periodic filesystem scan interval.
 - `TRASH_DIR=/data/trash`: where soft-deleted files are moved.
 

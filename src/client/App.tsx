@@ -1339,7 +1339,8 @@ function normalizeTag(value: string): string {
     .replace(/\s*\/\s*/g, '/')
     .replace(/\s+/g, ' ')
     .replace(/^\/+|\/+$/g, '')
-    .trim();
+    .trim()
+    .toLowerCase();
 }
 
 function displayTag(tag: string): string {

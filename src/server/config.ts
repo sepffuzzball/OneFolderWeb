@@ -62,6 +62,8 @@ export const runtimeConfig: RuntimeConfig = {
   hideEmptyFolders: boolFromEnv('HIDE_EMPTY_FOLDERS', false),
   maxUploadMb: numberFromEnv('MAX_UPLOAD_MB', 250),
   defaultReadOnlyView: viewModeFromEnv('DEFAULT_READ_ONLY_VIEW', 'grid'),
+  backupIntervalHours: numberFromEnv('BACKUP_INTERVAL_HOURS', 24),
+  backupRetentionDays: numberFromEnv('BACKUP_RETENTION_DAYS', 90),
 };
 
 export const serverConfig = {

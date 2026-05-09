@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import crypto, { randomUUID } from 'node:crypto';
 import type { AppSettings, LibrarySettings, MediaItem } from '../shared/types.js';
-import { paths } from './config.js';
+import { paths, runtimeConfig } from './config.js';
 
 const settingsPath = path.join(paths.settingsDir, 'settings.json');
 const indexPath = path.join(paths.settingsDir, 'index.json');
@@ -88,7 +88,63 @@ export async function saveIndex(files: MediaItem[]): Promise<MediaIndex> {
 }
 
 async function backupJson(prefix: string, value: unknown): Promise<void> {
+  const retentionDays = runtimeConfig.backupRetentionDays;
+  const intervalHours = runtimeConfig.backupIntervalHours;
+  if (retentionDays <= 0 || intervalHours <= 0) return;
+
   await fs.promises.mkdir(paths.backupDir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  await fs.promises.writeFile(path.join(paths.backupDir, `${prefix}-${stamp}.json`), `${JSON.stringify(value, null, 2)}\n`);
+  await pruneBackups(prefix, retentionDays);
+
+  const serialized = `${JSON.stringify(stableBackupValue(prefix, value), null, 2)}\n`;
+  const hash = crypto.createHash('sha256').update(serialized).digest('hex');
+  const latestHash = await latestBackupHash(prefix);
+  if (latestHash === hash) return;
+
+  const period = backupPeriodKey(new Date(), intervalHours);
+  const backupPath = path.join(paths.backupDir, `${prefix}-${period}.json`);
+  await fs.promises.writeFile(backupPath, serialized);
+}
+
+function stableBackupValue(prefix: string, value: unknown): unknown {
+  if (prefix !== 'index' || !value || typeof value !== 'object') return value;
+  const index = value as MediaIndex;
+  return { version: index.version, files: index.files };
+}
+
+function backupPeriodKey(date: Date, intervalHours: number): string {
+  if (intervalHours === 24) return date.toISOString().slice(0, 10);
+  const intervalMs = intervalHours * 60 * 60 * 1000;
+  const start = new Date(Math.floor(date.getTime() / intervalMs) * intervalMs);
+  return start.toISOString().replace(/[:.]/g, '-');
+}
+
+async function latestBackupHash(prefix: string): Promise<string | undefined> {
+  const backups = await backupFiles(prefix);
+  const latest = backups.at(-1);
+  if (!latest) return undefined;
+  const text = await fs.promises.readFile(path.join(paths.backupDir, latest.name), 'utf8').catch(() => undefined);
+  return text ? crypto.createHash('sha256').update(text).digest('hex') : undefined;
+}
+
+async function pruneBackups(prefix: string, retentionDays: number): Promise<void> {
+  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const backups = await backupFiles(prefix);
+  await Promise.all(
+    backups
+      .filter((backup) => backup.mtimeMs < cutoff)
+      .map((backup) => fs.promises.rm(path.join(paths.backupDir, backup.name), { force: true }).catch(() => undefined)),
+  );
+}
+
+async function backupFiles(prefix: string): Promise<Array<{ name: string; mtimeMs: number }>> {
+  const entries = await fs.promises.readdir(paths.backupDir, { withFileTypes: true }).catch(() => []);
+  const backups = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.startsWith(`${prefix}-`) && entry.name.endsWith('.json'))
+      .map(async (entry) => {
+        const stat = await fs.promises.stat(path.join(paths.backupDir, entry.name));
+        return { name: entry.name, mtimeMs: stat.mtimeMs };
+      }),
+  );
+  return backups.sort((a, b) => a.mtimeMs - b.mtimeMs || a.name.localeCompare(b.name));
 }

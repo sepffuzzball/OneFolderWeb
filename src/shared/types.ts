@@ -21,6 +21,8 @@ export type RuntimeConfig = {
   hideEmptyFolders: boolean;
   maxUploadMb: number;
   defaultReadOnlyView: ViewMode;
+  backupIntervalHours: number;
+  backupRetentionDays: number;
 };
 
 export type IndexStatus = {
