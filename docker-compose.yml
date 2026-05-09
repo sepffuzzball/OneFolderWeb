@@ -1,0 +1,18 @@
+services:
+  onefolder-web:
+    build: .
+    image: onefolder-web:0.1.0
+    ports:
+      - "4317:4317"
+    environment:
+      READ_ONLY: "false"
+      BLACKLISTED_TAGS: ""
+      HIDE_EMPTY_FOLDERS: "false"
+      MAX_UPLOAD_MB: "250"
+      TRASH_DIR: "/data/trash"
+    volumes:
+      - ./data/library:/data/library
+      - ./data/settings:/data/settings
+      - ./data/thumbnails:/data/thumbnails
+      - ./data/backups:/data/backups
+      - ./data/trash:/data/trash

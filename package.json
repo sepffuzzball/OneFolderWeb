@@ -1,0 +1,41 @@
+{
+  "name": "onefolder-web",
+  "version": "0.1.0",
+  "description": "A self-hosted web UI for browsing, tagging, and sharing OneFolder-style media libraries.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsx src/server/index.ts",
+    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.server.json && vite build",
+    "start": "node dist/server/server/index.js",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "chokidar": "^4.0.3",
+    "exiftool-vendored": "^35.20.0",
+    "express": "^5.1.0",
+    "lucide-react": "^0.468.0",
+    "mime-types": "^2.1.35",
+    "multer": "^2.0.2",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "sharp": "^0.34.3",
+    "vite": "^7.1.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/mime-types": "^2.1.4",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

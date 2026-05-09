@@ -1,0 +1,377 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import chokidar from 'chokidar';
+import express, { type Request, type Response } from 'express';
+import mime from 'mime-types';
+import multer from 'multer';
+import { runtimeConfig, paths, serverConfig } from './config.js';
+import { closeMetadataTools } from './metadata.js';
+import {
+  buildFolderTree,
+  createFolder,
+  currentIndexStatus,
+  filterMedia,
+  findMedia,
+  initializeIndex,
+  listKnownTags,
+  listTagSummaries,
+  moveMedia,
+  normalizeTag,
+  removeTagEverywhere,
+  renameTagEverywhere,
+  resolveMediaPath,
+  resolveThumbnailPath,
+  scanLibraries,
+  targetUploadDirectory,
+  trashMedia,
+  updateTags,
+} from './scanner.js';
+import { loadSettings, saveSettings } from './storage.js';
+import type {
+  AppSettings,
+  CreateFolderRequest,
+  DeleteMediaRequest,
+  MediaQuery,
+  MoveMediaRequest,
+  RenameTagRequest,
+  TagCatalogUpdateRequest,
+  TagSummary,
+  TagUpdateRequest,
+} from '../shared/types.js';
+
+const upload = multer({
+  dest: path.join(paths.settingsDir, 'incoming'),
+  limits: {
+    fileSize: runtimeConfig.maxUploadMb * 1024 * 1024,
+  },
+});
+
+function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
+  return (req: Request, res: Response) => {
+    fn(req, res).catch((error) => {
+      console.error(error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Internal server error' });
+    });
+  };
+}
+
+function ensureWritable(req: Request, res: Response, next: () => void) {
+  if (runtimeConfig.readOnly) {
+    res.status(403).json({ error: 'This OneFolder Web instance is read-only.' });
+    return;
+  }
+  next();
+}
+
+export async function createApp(): Promise<express.Express> {
+  await initializeIndex();
+
+  const app = express();
+  app.use(express.json({ limit: '2mb' }));
+
+  app.get('/api/config', (_req, res) => res.json({ data: runtimeConfig }));
+
+  app.get('/api/status', (_req, res) => res.json({ data: currentIndexStatus() }));
+
+  app.get(
+    '/api/settings',
+    asyncHandler(async (_req, res) => {
+      res.json({ data: await loadSettings() });
+    }),
+  );
+
+  app.put(
+    '/api/settings',
+    ensureWritable,
+    asyncHandler(async (req, res) => {
+      const settings = req.body as AppSettings;
+      res.json({ data: await saveSettings(settings) });
+      void scanLibraries();
+    }),
+  );
+
+  app.post(
+    '/api/scan',
+    asyncHandler(async (_req, res) => {
+      res.json({ data: await scanLibraries() });
+    }),
+  );
+
+  app.get('/api/media', (req, res) => {
+    const tagExpression = typeof req.query.tags === 'string' ? req.query.tags : undefined;
+    const tags = tagExpression && !hasTagExpressionOperators(tagExpression) ? tagExpression.split(',').filter(Boolean) : [];
+    const offset = boundedNumber(req.query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const limit = boundedNumber(req.query.limit, 240, 1, 1000);
+    const query: MediaQuery = {
+      q: typeof req.query.q === 'string' ? req.query.q : undefined,
+      tags,
+      tagExpression,
+      folder: typeof req.query.folder === 'string' ? req.query.folder : undefined,
+      libraryId: typeof req.query.libraryId === 'string' ? req.query.libraryId : undefined,
+    };
+    const filtered = filterMedia(query);
+    const items = filtered.slice(offset, offset + limit);
+    res.json({
+      data: {
+        items,
+        total: filtered.length,
+        offset,
+        limit,
+        hasMore: offset + items.length < filtered.length,
+      },
+    });
+  });
+
+  app.get('/api/media/:id', (req, res) => {
+    const item = findMedia(req.params.id);
+    if (!item) {
+      res.status(404).json({ error: 'Media not found' });
+      return;
+    }
+    res.json({ data: item });
+  });
+
+  app.get(
+    '/api/tree',
+    asyncHandler(async (_req, res) => {
+      res.json({ data: await buildFolderTree() });
+    }),
+  );
+
+  app.post(
+    '/api/tags',
+    ensureWritable,
+    asyncHandler(async (req, res) => {
+      const payload = req.body as TagUpdateRequest;
+      if (!Array.isArray(payload.ids) || payload.ids.length === 0) {
+        res.status(400).json({ error: 'At least one media item is required.' });
+        return;
+      }
+      res.json({ data: await updateTags(payload) });
+    }),
+  );
+
+  app.get(
+    '/api/tags',
+    asyncHandler(async (_req, res) => {
+      const settings = await loadSettings();
+      const tags = Array.from(new Set([...settings.tagCatalog, ...listKnownTags()].map(normalizeTag).filter(Boolean))).sort(
+        (a, b) => a.localeCompare(b),
+      );
+      res.json({ data: tags });
+    }),
+  );
+
+  app.get('/api/tags/summary', (_req, res) => {
+    res.json({ data: listTagSummaries() satisfies TagSummary[] });
+  });
+
+  app.put(
+    '/api/tags/catalog',
+    ensureWritable,
+    asyncHandler(async (req, res) => {
+      const payload = req.body as TagCatalogUpdateRequest;
+      const settings = await loadSettings();
+      const next = await saveSettings({
+        ...settings,
+        tagCatalog: Array.from(new Set(payload.tags.map(normalizeTag).filter(Boolean))).sort((a, b) =>
+          a.localeCompare(b),
+        ),
+      });
+      res.json({ data: next.tagCatalog });
+    }),
+  );
+
+  app.post(
+    '/api/tags/rename',
+    ensureWritable,
+    asyncHandler(async (req, res) => {
+      const payload = req.body as RenameTagRequest;
+      const settings = await loadSettings();
+      const from = normalizeTag(payload.from);
+      const to = normalizeTag(payload.to);
+      const renamed = await renameTagEverywhere(from, to);
+      await saveSettings({
+        ...settings,
+        tagCatalog: settings.tagCatalog
+          .map((tag) => {
+            const normalized = normalizeTag(tag);
+            if (normalized.toLowerCase() === from.toLowerCase()) return to;
+            if (normalized.toLowerCase().startsWith(`${from.toLowerCase()}/`)) return `${to}${normalized.slice(from.length)}`;
+            return normalized;
+          })
+          .filter(Boolean),
+      });
+      res.json({ data: renamed });
+    }),
+  );
+
+  app.delete(
+    '/api/tags',
+    ensureWritable,
+    asyncHandler(async (req, res) => {
+      const tag = normalizeTag(String(req.query.tag ?? ''));
+      const settings = await loadSettings();
+      const removed = await removeTagEverywhere(tag);
+      await saveSettings({
+        ...settings,
+        tagCatalog: settings.tagCatalog.filter((catalogTag) => {
+          const normalized = normalizeTag(catalogTag).toLowerCase();
+          const target = tag.toLowerCase();
+          return normalized !== target && !normalized.startsWith(`${target}/`);
+        }),
+      });
+      res.json({ data: removed });
+    }),
+  );
+
+  app.post(
+    '/api/folders',
+    ensureWritable,
+    asyncHandler(async (req, res) => {
+      const payload = req.body as CreateFolderRequest;
+      const relativePath = await createFolder(payload.libraryId, payload.parentPath, payload.name);
+      res.json({ data: { relativePath } });
+    }),
+  );
+
+  app.post(
+    '/api/upload',
+    ensureWritable,
+    upload.array('files', 250),
+    asyncHandler(async (req, res) => {
+      const files = (req.files ?? []) as Express.Multer.File[];
+      const libraryId = String(req.body.libraryId ?? '');
+      const targetPath = req.body.targetPath ? String(req.body.targetPath) : undefined;
+      const targetDir = await targetUploadDirectory(libraryId, targetPath);
+      const saved: string[] = [];
+      for (const file of files) {
+        const filename = safeFileName(file.originalname);
+        const finalPath = await uniquePath(path.join(targetDir, filename));
+        await fs.promises.rename(file.path, finalPath);
+        saved.push(path.basename(finalPath));
+      }
+      await scanLibraries();
+      res.json({ data: { saved } });
+    }),
+  );
+
+  app.post(
+    '/api/move',
+    ensureWritable,
+    asyncHandler(async (req, res) => {
+      const payload = req.body as MoveMediaRequest;
+      if (!Array.isArray(payload.ids) || payload.ids.length === 0) {
+        res.status(400).json({ error: 'At least one media item is required.' });
+        return;
+      }
+      res.json({ data: await moveMedia(payload) });
+    }),
+  );
+
+  app.post(
+    '/api/delete',
+    ensureWritable,
+    asyncHandler(async (req, res) => {
+      const payload = req.body as DeleteMediaRequest;
+      if (!Array.isArray(payload.ids) || payload.ids.length === 0) {
+        res.status(400).json({ error: 'At least one media item is required.' });
+        return;
+      }
+      res.json({ data: await trashMedia(payload) });
+    }),
+  );
+
+  app.get(
+    '/thumb/:id',
+    asyncHandler(async (req, res) => {
+      const size = req.query.size === 'preview' ? 'preview' : 'grid';
+      const thumbnailPath = resolveThumbnailPath(String(req.params.id), size);
+      if (!thumbnailPath || !fs.existsSync(thumbnailPath)) {
+        res.status(404).end();
+        return;
+      }
+      res.type('image/jpeg').sendFile(thumbnailPath);
+    }),
+  );
+
+  app.get(
+    '/file/:id',
+    asyncHandler(async (req, res) => {
+      const filePath = await resolveMediaPath(String(req.params.id));
+      if (!filePath || !fs.existsSync(filePath)) {
+        res.status(404).end();
+        return;
+      }
+      res.type(mime.lookup(filePath) || 'application/octet-stream').sendFile(filePath);
+    }),
+  );
+
+  await attachFrontend(app);
+  attachScanner();
+
+  process.once('SIGINT', () => void closeMetadataTools().finally(() => process.exit(0)));
+  process.once('SIGTERM', () => void closeMetadataTools().finally(() => process.exit(0)));
+
+  return app;
+}
+
+async function attachFrontend(app: express.Express): Promise<void> {
+  if (process.env.NODE_ENV !== 'production') {
+    const { createServer } = await import('vite');
+    const vite = await createServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+    return;
+  }
+
+  app.use(express.static(paths.publicDir));
+  app.get(/.*/, (_req, res) => {
+    res.sendFile(path.join(paths.publicDir, 'index.html'));
+  });
+}
+
+function boundedNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(parsed)));
+}
+
+function hasTagExpressionOperators(value: string): boolean {
+  return /[(),]|\b(?:and|or)\b/i.test(value);
+}
+
+function attachScanner() {
+  let timer: NodeJS.Timeout | undefined;
+  const queueScan = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => void scanLibraries(), 800);
+  };
+
+  const watcher = chokidar.watch(paths.dataRoot, {
+    ignoreInitial: true,
+    awaitWriteFinish: { stabilityThreshold: 1200, pollInterval: 250 },
+  });
+  watcher.on('add', queueScan).on('change', queueScan).on('unlink', queueScan).on('addDir', queueScan).on('unlinkDir', queueScan);
+  setInterval(() => void scanLibraries(), serverConfig.scanIntervalMs).unref();
+}
+
+function safeFileName(value: string): string {
+  const parsed = path.parse(value);
+  const base = parsed.name.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').trim() || 'upload';
+  const ext = parsed.ext.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '').toLowerCase();
+  return `${base}${ext}`;
+}
+
+async function uniquePath(initialPath: string): Promise<string> {
+  const parsed = path.parse(initialPath);
+  let candidate = initialPath;
+  let index = 1;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(parsed.dir, `${parsed.name}-${index}${parsed.ext}`);
+    index += 1;
+  }
+  return candidate;
+}
