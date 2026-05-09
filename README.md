@@ -56,4 +56,10 @@ The development server serves both the API and Vite UI at [http://localhost:4317
 
 ## Versioning
 
-This project uses semantic versioning from `package.json`. The Docker workflow publishes tags for pushed semver tags such as `v0.1.0`, plus `latest` from `main`.
+This project uses semantic versioning from `package.json`. On pushes to `main`, the release workflow increments the patch version by default, commits the updated `package.json` and `package-lock.json`, creates a matching git tag such as `v0.1.1`, and publishes Docker images to GitHub Container Registry with matching tags:
+
+- `ghcr.io/<owner>/<repo>:0.1.1`
+- `ghcr.io/<owner>/<repo>:0.1`
+- `ghcr.io/<owner>/<repo>:latest`
+
+You can also run the workflow manually and choose `patch`, `minor`, or `major`.

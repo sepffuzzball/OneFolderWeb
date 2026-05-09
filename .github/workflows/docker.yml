@@ -1,29 +1,108 @@
-name: Build Docker Image
+name: Release Docker Image
 
 on:
   push:
     branches: [main]
-    tags:
-      - "v*.*.*"
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semantic version segment to increment
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  docker:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+  release:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.actor != 'github-actions[bot]' && !contains(github.event.head_commit.message, 'chore(release):')))
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Increment semantic version
+        id: version
+        shell: bash
+        run: |
+          BUMP="${{ inputs.bump || 'patch' }}"
+          npm version "$BUMP" --no-git-tag-version
+          VERSION="$(node -p "require('./package.json').version")"
+          git add package.json package-lock.json
+          git commit -m "chore(release): v${VERSION}"
+          git tag "v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Push release commit and tag
+        run: |
+          git push origin HEAD:main
+          git push origin "v${{ steps.version.outputs.version }}"
+
+      - name: Set image name
+        id: image
+        shell: bash
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -34,17 +113,51 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.image.outputs.image }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=match,pattern=^(\d+\.\d+)\.\d+$,group=1,value=${{ steps.version.outputs.version }}
             type=sha
 
-      - name: Build and publish
+      - name: Build and publish versioned Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  docker-pr:
+    needs: validate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set image name
+        id: image
+        shell: bash
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.image }}
+          tags: |
+            type=sha
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
