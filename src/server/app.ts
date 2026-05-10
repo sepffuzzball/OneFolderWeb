@@ -249,7 +249,7 @@ export async function createApp(): Promise<express.Express> {
       for (const file of files) {
         const filename = safeFileName(file.originalname);
         const finalPath = await uniquePath(path.join(targetDir, filename));
-        await fs.promises.rename(file.path, finalPath);
+        await moveUploadedFile(file.path, finalPath);
         saved.push(path.basename(finalPath));
       }
       await scanLibraries();
@@ -549,4 +549,29 @@ async function uniquePath(initialPath: string): Promise<string> {
     index += 1;
   }
   return candidate;
+}
+
+async function moveUploadedFile(source: string, destination: string): Promise<void> {
+  try {
+    await fs.promises.rename(source, destination);
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== 'EXDEV') throw error;
+    const pendingDestination = await uniquePath(path.join(path.dirname(destination), `.uploading-${path.basename(destination)}`));
+    try {
+      await fs.promises.copyFile(source, pendingDestination, fs.constants.COPYFILE_EXCL);
+      await fs.promises.rename(pendingDestination, destination);
+    } catch (copyError) {
+      await fs.promises.rm(pendingDestination, { force: true });
+      throw copyError;
+    }
+    try {
+      await fs.promises.unlink(source);
+    } catch (unlinkError) {
+      console.warn(`Uploaded file was copied to ${destination}, but temporary file cleanup failed for ${source}.`, unlinkError);
+    }
+  }
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
 }
