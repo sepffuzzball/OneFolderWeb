@@ -309,7 +309,7 @@ textarea {
 
 .bulkbar {
   display: grid;
-  grid-template-columns: auto minmax(150px, 0.8fr) minmax(180px, 1fr) repeat(6, auto);
+  grid-template-columns: auto minmax(150px, 0.8fr) minmax(180px, 1fr) repeat(7, auto);
   gap: 8px;
   align-items: center;
   border-bottom: 1px solid #292d34;
@@ -421,12 +421,12 @@ textarea {
 }
 
 .tile[draggable="true"],
-.list-gallery button[draggable="true"] {
+.list-row[draggable="true"] {
   cursor: grab;
 }
 
 .tile[draggable="true"]:active,
-.list-gallery button[draggable="true"]:active {
+.list-row[draggable="true"]:active {
   cursor: grabbing;
 }
 
@@ -491,6 +491,25 @@ textarea {
   font-size: 12px;
 }
 
+.tile-download {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: inline-grid;
+  width: 34px;
+  min-height: 34px;
+  place-items: center;
+  border-radius: 6px;
+  background: rgba(10, 12, 15, 0.72);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.tile:hover .tile-download,
+.tile:focus-within .tile-download {
+  opacity: 1;
+}
+
 .list-gallery {
   display: grid;
   flex: 1;
@@ -501,17 +520,26 @@ textarea {
   padding: 14px;
 }
 
-.list-gallery button {
+.list-row {
   display: grid;
-  grid-template-columns: 58px minmax(120px, 1fr) minmax(120px, 0.7fr) minmax(120px, 0.8fr) 110px;
+  grid-template-columns: 58px minmax(120px, 1fr) minmax(120px, 0.7fr) minmax(120px, 0.8fr) 110px 42px;
   gap: 12px;
   align-items: center;
   min-height: 68px;
+  border: 1px solid #343840;
   border-radius: 8px;
+  background: #1c1f25;
+  color: #f1f2f4;
+  padding: 0 10px;
   text-align: left;
 }
 
-.list-gallery button.selected {
+.list-row:hover {
+  background: #282c34;
+  border-color: #505660;
+}
+
+.list-row.selected {
   border-color: #7ca6dc;
   background: #263449;
 }
@@ -521,6 +549,14 @@ textarea {
   height: 48px;
   border-radius: 6px;
   object-fit: cover;
+}
+
+.list-row button {
+  display: inline-grid;
+  width: 34px;
+  min-height: 34px;
+  place-items: center;
+  border-radius: 6px;
 }
 
 .calendar-gallery {
@@ -840,6 +876,171 @@ textarea {
   gap: 8px;
 }
 
+.export-panel {
+  position: absolute;
+  right: 382px;
+  bottom: 24px;
+  z-index: 4;
+  display: grid;
+  width: min(420px, calc(100% - 48px));
+  max-height: calc(100vh - 80px);
+  gap: 12px;
+  border: 1px solid #343840;
+  border-radius: 8px;
+  background: #151820;
+  overflow: auto;
+  padding: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+.export-panel > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.close-export {
+  width: 34px;
+  min-height: 34px;
+  border-radius: 6px;
+}
+
+.export-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.export-options button {
+  min-width: 0;
+  border-radius: 6px;
+}
+
+.export-options button.active {
+  background: #38506f;
+  border-color: #5f7da7;
+}
+
+.export-crop-preview {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #343840;
+  border-radius: 8px;
+  background: #07090c;
+  user-select: none;
+}
+
+.export-crop-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  pointer-events: none;
+}
+
+.crop-shade {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.52);
+  pointer-events: none;
+}
+
+.crop-shade.top {
+  top: 0;
+  right: 0;
+  left: 0;
+}
+
+.crop-shade.bottom {
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
+
+.crop-shade.left {
+  left: 0;
+}
+
+.crop-shade.right {
+  right: 0;
+}
+
+.crop-box {
+  position: absolute;
+  min-height: 0;
+  border: 2px solid #dbe8f8;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.4) 1px, transparent 1px) 33.33% 0 / 33.33% 100%,
+    linear-gradient(rgba(255, 255, 255, 0.4) 1px, transparent 1px) 0 33.33% / 100% 33.33%,
+    rgba(124, 166, 220, 0.12);
+  cursor: move;
+  touch-action: none;
+}
+
+button.crop-box:hover:not(:disabled),
+button.crop-box:focus {
+  border-color: #dbe8f8;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.4) 1px, transparent 1px) 33.33% 0 / 33.33% 100%,
+    linear-gradient(rgba(255, 255, 255, 0.4) 1px, transparent 1px) 0 33.33% / 100% 33.33%,
+    rgba(124, 166, 220, 0.12);
+}
+
+.crop-box.locked {
+  cursor: default;
+}
+
+.crop-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #dbe8f8;
+  border-radius: 50%;
+  background: #151820;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+}
+
+.crop-handle.nw {
+  top: -8px;
+  left: -8px;
+  cursor: nwse-resize;
+}
+
+.crop-handle.ne {
+  top: -8px;
+  right: -8px;
+  cursor: nesw-resize;
+}
+
+.crop-handle.sw {
+  bottom: -8px;
+  left: -8px;
+  cursor: nesw-resize;
+}
+
+.crop-handle.se {
+  right: -8px;
+  bottom: -8px;
+  cursor: nwse-resize;
+}
+
+.crop-box.locked .crop-handle {
+  display: none;
+}
+
+.export-dimensions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.export-dimensions label {
+  display: grid;
+  gap: 6px;
+}
+
+.export-download {
+  border-radius: 6px;
+}
+
 .close {
   position: absolute;
   top: 10px;
@@ -932,8 +1133,8 @@ textarea {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   }
 
-  .list-gallery button {
-    grid-template-columns: 52px 1fr;
+  .list-row {
+    grid-template-columns: 52px 1fr 42px;
   }
 
   .list-gallery small,

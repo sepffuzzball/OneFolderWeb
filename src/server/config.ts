@@ -68,7 +68,7 @@ export const runtimeConfig: RuntimeConfig = {
 };
 
 export const serverConfig = {
-  host: process.env.HOST?.trim() || 'localhost',
+  host: process.env.HOST?.trim() || '0.0.0.0',
   port: numberFromEnv('PORT', 4317),
   scanIntervalMs: numberFromEnv('SCAN_INTERVAL_MS', 15_000),
 };

@@ -3,6 +3,7 @@ import {
   Check,
   Clipboard,
   Copy,
+  Download,
   FolderPlus,
   Grid2X2,
   Image as ImageIcon,
@@ -14,6 +15,7 @@ import {
   Search,
   Settings,
   Shield,
+  SlidersHorizontal,
   Sparkles,
   Tags,
   Trash2,
@@ -25,6 +27,9 @@ import type { AppSettings, FolderNode, IndexStatus, MediaItem, PagedMediaRespons
 type Toast = { id: number; message: string };
 type SidebarTab = 'libraries' | 'tags';
 type TagSortMode = 'alpha' | 'count';
+type ExportAspect = 'original' | '16:9' | '16:10' | '1:1';
+type CropRect = { x: number; y: number; width: number; height: number };
+type CropHandle = 'nw' | 'ne' | 'sw' | 'se';
 const MEDIA_PAGE_SIZE = 240;
 
 const viewOptions: Array<{ id: ViewMode; label: string; icon: typeof Grid2X2 }> = [
@@ -359,6 +364,20 @@ export function App() {
     notify('Share link copied');
   };
 
+  const downloadMedia = (item: MediaItem) => {
+    triggerDownload(`/download/${encodeURIComponent(item.id)}`);
+  };
+
+  const downloadSelectedFiles = (itemsToDownload = selectedItems) => {
+    if (itemsToDownload.length === 0) {
+      notify('No files selected');
+      return;
+    }
+    const ids = itemsToDownload.map((item) => item.id).join(',');
+    triggerDownload(`/api/download?ids=${encodeURIComponent(ids)}`);
+    notify(itemsToDownload.length === 1 ? 'Download started' : `${itemsToDownload.length} files downloading`);
+  };
+
   const saveTagCatalog = async (tags: string[]) => {
     const catalog = await api<string[]>('/api/tags/catalog', {
       method: 'PUT',
@@ -569,6 +588,7 @@ export function App() {
               onApplyTags={applyTags}
               onCopy={copySelectedFiles}
               onCopyLink={() => selectedItems[0] && copyShareLink(selectedItems[0])}
+              onDownload={() => downloadSelectedFiles(selectedItems)}
               onDelete={() => deleteItems(selectedIds)}
             />
 
@@ -582,6 +602,7 @@ export function App() {
               onOpen={openItem}
               onClear={clearSelection}
               onPrefetch={prefetchMoreMedia}
+              onDownload={downloadMedia}
               onDragStart={(item, event) => {
                 const ids = selectedIds.includes(item.id) ? selectedIds : [item.id];
                 selectionAnchorId.current = item.id;
@@ -608,6 +629,7 @@ export function App() {
           onRemoveTag={(tag) => removeTagFromItem(activeItem.id, tag)}
           onCopy={() => copySelectedFiles(selectedItems.length > 0 ? selectedItems : [activeItem])}
           onCopyLink={() => copyShareLink(activeItem)}
+          onDownload={() => downloadMedia(activeItem)}
           onDelete={() => deleteItems(selectedIds.length > 0 ? selectedIds : [activeItem.id])}
         />
       )}
@@ -780,6 +802,7 @@ function BulkBar(props: {
   onApplyTags: (mode: 'replace' | 'add' | 'remove') => Promise<void>;
   onCopy: () => Promise<void>;
   onCopyLink: () => void;
+  onDownload: () => void;
   onDelete: () => Promise<void>;
 }) {
   if (props.selectedItems.length === 0) return null;
@@ -793,6 +816,7 @@ function BulkBar(props: {
       <button onClick={() => props.onApplyTags('remove')} disabled={props.readOnly}>Remove</button>
       <button onClick={() => void props.onCopy()}><Clipboard size={16} />Copy</button>
       <button onClick={props.onCopyLink}><Link size={16} />Link</button>
+      <button onClick={props.onDownload}><Download size={16} />Download</button>
       <button onClick={() => void props.onDelete()} disabled={props.readOnly}><Trash2 size={16} />Trash</button>
     </div>
   );
@@ -995,6 +1019,7 @@ function Gallery({
   onOpen,
   onClear,
   onPrefetch,
+  onDownload,
   onDragStart,
 }: {
   view: ViewMode;
@@ -1006,14 +1031,15 @@ function Gallery({
   onOpen: (item: MediaItem) => void;
   onClear: () => void;
   onPrefetch: () => Promise<void>;
+  onDownload: (item: MediaItem) => void;
   onDragStart: (item: MediaItem, event: React.DragEvent) => void;
 }) {
   const { scrollRef, maybePrefetch } = useAutoPrefetch(hasMore, isPrefetching, onPrefetch, items.length);
   if (items.length === 0) {
     return <div className="empty-state" onClick={onClear}>No media matches the current filters.</div>;
   }
-  if (view === 'list') return <ListGallery items={items} selectedIds={selectedIds} hasMore={hasMore} isPrefetching={isPrefetching} onSelect={onSelect} onOpen={onOpen} onClear={onClear} onPrefetch={onPrefetch} onDragStart={onDragStart} />;
-  if (view === 'calendar') return <CalendarGallery items={items} selectedIds={selectedIds} hasMore={hasMore} isPrefetching={isPrefetching} onSelect={onSelect} onOpen={onOpen} onClear={onClear} onPrefetch={onPrefetch} onDragStart={onDragStart} />;
+  if (view === 'list') return <ListGallery items={items} selectedIds={selectedIds} hasMore={hasMore} isPrefetching={isPrefetching} onSelect={onSelect} onOpen={onOpen} onClear={onClear} onPrefetch={onPrefetch} onDownload={onDownload} onDragStart={onDragStart} />;
+  if (view === 'calendar') return <CalendarGallery items={items} selectedIds={selectedIds} hasMore={hasMore} isPrefetching={isPrefetching} onSelect={onSelect} onOpen={onOpen} onClear={onClear} onPrefetch={onPrefetch} onDownload={onDownload} onDragStart={onDragStart} />;
   const isMasonry = view === 'masonry-horizontal' || view === 'masonry-vertical';
   const className = view === 'masonry-horizontal' ? 'gallery masonry horizontal pure' : view === 'masonry-vertical' ? 'gallery masonry pure' : 'gallery grid';
   return (
@@ -1028,6 +1054,7 @@ function Gallery({
           showMeta={!isMasonry}
           onSelect={onSelect}
           onOpen={onOpen}
+          onDownload={onDownload}
           onDragStart={onDragStart}
         />
       ))}
@@ -1035,11 +1062,17 @@ function Gallery({
   );
 }
 
-function MediaTile({ item, selected, showMeta = true, onSelect, onOpen, onDragStart }: { item: MediaItem; selected: boolean; showMeta?: boolean; onSelect: (item: MediaItem, event?: React.MouseEvent) => void; onOpen: (item: MediaItem) => void; onDragStart: (item: MediaItem, event: React.DragEvent) => void }) {
+function MediaTile({ item, selected, showMeta = true, onSelect, onOpen, onDownload, onDragStart }: { item: MediaItem; selected: boolean; showMeta?: boolean; onSelect: (item: MediaItem, event?: React.MouseEvent) => void; onOpen: (item: MediaItem) => void; onDownload: (item: MediaItem) => void; onDragStart: (item: MediaItem, event: React.DragEvent) => void }) {
   return (
     <article className={`tile ${selected ? 'selected' : ''}`} tabIndex={0} draggable onDragStart={(event) => onDragStart(item, event)} onClick={(event) => onSelect(item, event)} onDoubleClick={() => onOpen(item)}>
       <img src={item.thumbnailUrl} alt={item.name} loading="lazy" />
       {item.kind === 'video' && <span className="kind">Video</span>}
+      <button className="tile-download" title="Download" onClick={(event) => {
+        event.stopPropagation();
+        onDownload(item);
+      }}>
+        <Download size={16} />
+      </button>
       {showMeta && (
         <footer>
           <strong>{item.name}</strong>
@@ -1050,26 +1083,32 @@ function MediaTile({ item, selected, showMeta = true, onSelect, onOpen, onDragSt
   );
 }
 
-function ListGallery({ items, selectedIds, hasMore, isPrefetching, onSelect, onOpen, onClear, onPrefetch, onDragStart }: { items: MediaItem[]; selectedIds: string[]; hasMore: boolean; isPrefetching: boolean; onSelect: (item: MediaItem, event?: React.MouseEvent) => void; onOpen: (item: MediaItem) => void; onClear: () => void; onPrefetch: () => Promise<void>; onDragStart: (item: MediaItem, event: React.DragEvent) => void }) {
+function ListGallery({ items, selectedIds, hasMore, isPrefetching, onSelect, onOpen, onClear, onPrefetch, onDownload, onDragStart }: { items: MediaItem[]; selectedIds: string[]; hasMore: boolean; isPrefetching: boolean; onSelect: (item: MediaItem, event?: React.MouseEvent) => void; onOpen: (item: MediaItem) => void; onClear: () => void; onPrefetch: () => Promise<void>; onDownload: (item: MediaItem) => void; onDragStart: (item: MediaItem, event: React.DragEvent) => void }) {
   const { scrollRef, maybePrefetch } = useAutoPrefetch(hasMore, isPrefetching, onPrefetch, items.length);
   return (
     <div ref={scrollRef} className="list-gallery" onScroll={maybePrefetch} onClick={(event) => {
       if (event.target === event.currentTarget) onClear();
     }}>
       {items.map((item) => (
-        <button key={item.id} draggable className={selectedIds.includes(item.id) ? 'selected' : ''} onDragStart={(event) => onDragStart(item, event)} onClick={(event) => onSelect(item, event)} onDoubleClick={() => onOpen(item)}>
+        <article key={item.id} tabIndex={0} draggable className={`list-row ${selectedIds.includes(item.id) ? 'selected' : ''}`} onDragStart={(event) => onDragStart(item, event)} onClick={(event) => onSelect(item, event)} onDoubleClick={() => onOpen(item)}>
           <img src={item.thumbnailUrl} alt="" />
           <span>{item.name}</span>
           <small>{item.folder || item.libraryName}</small>
           <small title={item.tags.join(', ')}>{displayTags(item.tags)}</small>
           <time>{new Date(item.createdAt).toLocaleDateString()}</time>
-        </button>
+          <button title="Download" onClick={(event) => {
+            event.stopPropagation();
+            onDownload(item);
+          }}>
+            <Download size={16} />
+          </button>
+        </article>
       ))}
     </div>
   );
 }
 
-function CalendarGallery({ items, selectedIds, hasMore, isPrefetching, onSelect, onOpen, onClear, onPrefetch, onDragStart }: { items: MediaItem[]; selectedIds: string[]; hasMore: boolean; isPrefetching: boolean; onSelect: (item: MediaItem, event?: React.MouseEvent) => void; onOpen: (item: MediaItem) => void; onClear: () => void; onPrefetch: () => Promise<void>; onDragStart: (item: MediaItem, event: React.DragEvent) => void }) {
+function CalendarGallery({ items, selectedIds, hasMore, isPrefetching, onSelect, onOpen, onClear, onPrefetch, onDownload, onDragStart }: { items: MediaItem[]; selectedIds: string[]; hasMore: boolean; isPrefetching: boolean; onSelect: (item: MediaItem, event?: React.MouseEvent) => void; onOpen: (item: MediaItem) => void; onClear: () => void; onPrefetch: () => Promise<void>; onDownload: (item: MediaItem) => void; onDragStart: (item: MediaItem, event: React.DragEvent) => void }) {
   const { scrollRef, maybePrefetch } = useAutoPrefetch(hasMore, isPrefetching, onPrefetch, items.length);
   const groups = useMemo(() => {
     const map = new Map<string, MediaItem[]>();
@@ -1089,7 +1128,7 @@ function CalendarGallery({ items, selectedIds, hasMore, isPrefetching, onSelect,
           <div className="calendar-grid" onClick={(event) => {
             if (event.target === event.currentTarget) onClear();
           }}>
-            {group.map((item) => <MediaTile key={item.id} item={item} selected={selectedIds.includes(item.id)} onSelect={onSelect} onOpen={onOpen} onDragStart={onDragStart} />)}
+            {group.map((item) => <MediaTile key={item.id} item={item} selected={selectedIds.includes(item.id)} onSelect={onSelect} onOpen={onOpen} onDownload={onDownload} onDragStart={onDragStart} />)}
           </div>
         </section>
       ))}
@@ -1133,9 +1172,11 @@ function DetailView(props: {
   onRemoveTag: (tag: string) => Promise<void>;
   onCopy: () => Promise<void>;
   onCopyLink: () => void;
+  onDownload: () => void;
   onDelete: () => Promise<void>;
 }) {
   const [fullLoaded, setFullLoaded] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   useEffect(() => {
     setFullLoaded(false);
@@ -1198,11 +1239,136 @@ function DetailView(props: {
             <button onClick={() => void props.onSave()} disabled={props.readOnly}><Check size={16} />Save XMP</button>
             <button onClick={() => void props.onCopy()}><Copy size={16} />Copy</button>
             <button onClick={props.onCopyLink}><Link size={16} />Link</button>
+            <button onClick={props.onDownload}><Download size={16} />Download</button>
+            {props.item.kind === 'image' && <button onClick={() => setExportOpen(true)}><SlidersHorizontal size={16} />Export</button>}
             <button onClick={() => void props.onDelete()} disabled={props.readOnly}><Trash2 size={16} />Trash</button>
           </div>
         </aside>
       </div>
+      {exportOpen && props.item.kind === 'image' && <ExportPanel item={props.item} onClose={() => setExportOpen(false)} />}
     </section>
+  );
+}
+
+function ExportPanel({ item, onClose }: { item: MediaItem; onClose: () => void }) {
+  const naturalWidth = item.width ?? 1600;
+  const naturalHeight = item.height ?? 1200;
+  const [aspect, setAspect] = useState<ExportAspect>('original');
+  const [width, setWidth] = useState(naturalWidth);
+  const [height, setHeight] = useState(naturalHeight);
+  const [crop, setCrop] = useState<CropRect>(() => defaultCropForAspect('original', naturalWidth, naturalHeight));
+  const previewRef = useRef<HTMLDivElement | null>(null);
+
+  const ratio = exportAspectRatio(aspect, naturalWidth, naturalHeight);
+  const setExportWidth = (value: number) => {
+    const nextWidth = Math.max(1, Math.round(value || 1));
+    setWidth(nextWidth);
+    setHeight(Math.max(1, Math.round(nextWidth / ratio)));
+  };
+  const setExportHeight = (value: number) => {
+    const nextHeight = Math.max(1, Math.round(value || 1));
+    setHeight(nextHeight);
+    setWidth(Math.max(1, Math.round(nextHeight * ratio)));
+  };
+  const chooseAspect = (nextAspect: ExportAspect) => {
+    const nextRatio = exportAspectRatio(nextAspect, naturalWidth, naturalHeight);
+    setAspect(nextAspect);
+    setCrop(defaultCropForAspect(nextAspect, naturalWidth, naturalHeight));
+    setHeight(Math.max(1, Math.round(width / nextRatio)));
+  };
+  const moveCrop = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (aspect === 'original') return;
+    const preview = previewRef.current;
+    if (!preview) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const start = { x: event.clientX, y: event.clientY, crop };
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const rect = preview.getBoundingClientRect();
+      const dx = (moveEvent.clientX - start.x) / rect.width;
+      const dy = (moveEvent.clientY - start.y) / rect.height;
+      setCrop(constrainCrop({ ...start.crop, x: start.crop.x + dx, y: start.crop.y + dy }));
+    };
+    const onPointerUp = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  };
+  const resizeCrop = (handle: CropHandle, event: React.PointerEvent<HTMLSpanElement>) => {
+    if (aspect === 'original') return;
+    const preview = previewRef.current;
+    if (!preview) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const ratio = exportAspectRatio(aspect, naturalWidth, naturalHeight);
+    const imageRatio = naturalWidth / naturalHeight;
+    const cropRatio = ratio / imageRatio;
+    const anchorX = handle.includes('w') ? crop.x + crop.width : crop.x;
+    const anchorY = handle.includes('n') ? crop.y + crop.height : crop.y;
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const rect = preview.getBoundingClientRect();
+      const pointerX = (moveEvent.clientX - rect.left) / rect.width;
+      const pointerY = (moveEvent.clientY - rect.top) / rect.height;
+      setCrop(resizeCropFromAnchor(anchorX, anchorY, pointerX, pointerY, handle, cropRatio));
+    };
+    const onPointerUp = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  };
+
+  return (
+    <div className="export-panel" onClick={(event) => event.stopPropagation()}>
+      <div>
+        <strong>Export image</strong>
+        <button className="close-export" onClick={onClose}>x</button>
+      </div>
+      <div className="export-options">
+        {(['original', '16:9', '16:10', '1:1'] as ExportAspect[]).map((option) => (
+          <button key={option} className={aspect === option ? 'active' : ''} onClick={() => chooseAspect(option)}>
+            {option === 'original' ? 'Original ratio' : option}
+          </button>
+        ))}
+      </div>
+      <div className="export-crop-preview" ref={previewRef}>
+        <img src={item.fileUrl} alt="" draggable={false} />
+        <div className="crop-shade top" style={{ height: `${crop.y * 100}%` }} />
+        <div className="crop-shade bottom" style={{ top: `${(crop.y + crop.height) * 100}%` }} />
+        <div className="crop-shade left" style={{ top: `${crop.y * 100}%`, width: `${crop.x * 100}%`, height: `${crop.height * 100}%` }} />
+        <div className="crop-shade right" style={{ top: `${crop.y * 100}%`, left: `${(crop.x + crop.width) * 100}%`, height: `${crop.height * 100}%` }} />
+        <button
+          className={`crop-box ${aspect === 'original' ? 'locked' : ''}`}
+          style={{
+            left: `${crop.x * 100}%`,
+            top: `${crop.y * 100}%`,
+            width: `${crop.width * 100}%`,
+            height: `${crop.height * 100}%`,
+          }}
+          onPointerDown={moveCrop}
+          type="button"
+          title={aspect === 'original' ? 'Full image selected' : 'Drag crop selection'}
+        >
+          {(['nw', 'ne', 'sw', 'se'] as CropHandle[]).map((handle) => (
+            <span
+              key={handle}
+              className={`crop-handle ${handle}`}
+              onPointerDown={(event) => resizeCrop(handle, event)}
+              aria-hidden="true"
+            />
+          ))}
+        </button>
+      </div>
+      <div className="export-dimensions">
+        <label>Width<input type="number" min={1} value={width} onChange={(event) => setExportWidth(Number(event.target.value))} /></label>
+        <label>Height<input type="number" min={1} value={height} onChange={(event) => setExportHeight(Number(event.target.value))} /></label>
+      </div>
+      <button className="export-download" onClick={() => void exportScaledImage(item, width, height, crop)}>Download export</button>
+    </div>
   );
 }
 
@@ -1241,6 +1407,15 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 
 function absoluteUrl(pathname: string): string {
   return new URL(pathname, window.location.origin).toString();
+}
+
+function triggerDownload(url: string, filename?: string) {
+  const link = document.createElement('a');
+  link.href = url;
+  if (filename) link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 async function writeTextToClipboard(text: string): Promise<void> {
@@ -1314,6 +1489,85 @@ async function blobToPngBlob(blob: Blob): Promise<Blob> {
   });
   bitmap.close();
   return pngBlob;
+}
+
+function exportAspectRatio(aspect: ExportAspect, width: number, height: number): number {
+  if (aspect === '16:9') return 16 / 9;
+  if (aspect === '16:10') return 16 / 10;
+  if (aspect === '1:1') return 1;
+  return width / height || 1;
+}
+
+function defaultCropForAspect(aspect: ExportAspect, width: number, height: number): CropRect {
+  const ratio = exportAspectRatio(aspect, width, height);
+  const currentRatio = width / height;
+  if (aspect === 'original' || Math.abs(currentRatio - ratio) < 0.001) return { x: 0, y: 0, width: 1, height: 1 };
+  if (currentRatio > ratio) {
+    const cropWidth = ratio / currentRatio;
+    return { x: (1 - cropWidth) / 2, y: 0, width: cropWidth, height: 1 };
+  }
+  const cropHeight = currentRatio / ratio;
+  return { x: 0, y: (1 - cropHeight) / 2, width: 1, height: cropHeight };
+}
+
+function constrainCrop(crop: CropRect): CropRect {
+  return {
+    ...crop,
+    x: Math.min(Math.max(0, crop.x), 1 - crop.width),
+    y: Math.min(Math.max(0, crop.y), 1 - crop.height),
+  };
+}
+
+function resizeCropFromAnchor(anchorX: number, anchorY: number, pointerX: number, pointerY: number, handle: CropHandle, ratio: number): CropRect {
+  const horizontalSize = Math.abs(pointerX - anchorX);
+  const verticalSize = Math.abs(pointerY - anchorY);
+  const maxWidth = handle.includes('w') ? anchorX : 1 - anchorX;
+  const maxHeight = handle.includes('n') ? anchorY : 1 - anchorY;
+  const maxRatioWidth = Math.max(0.001, Math.min(maxWidth, maxHeight * ratio));
+  const minWidth = Math.min(0.05, maxRatioWidth);
+  const targetWidth = Math.max(horizontalSize, verticalSize * ratio);
+  const width = Math.max(minWidth, Math.min(targetWidth, maxRatioWidth));
+  const height = width / ratio;
+  return constrainCrop({
+    x: handle.includes('w') ? anchorX - width : anchorX,
+    y: handle.includes('n') ? anchorY - height : anchorY,
+    width,
+    height,
+  });
+}
+
+async function exportScaledImage(item: MediaItem, width: number, height: number, crop: CropRect): Promise<void> {
+  const blob = await fetch(item.fileUrl).then((response) => response.blob());
+  const bitmap = await createImageBitmap(blob);
+  const source = cropToSourceRect(crop, bitmap.width, bitmap.height);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(width));
+  canvas.height = Math.max(1, Math.round(height));
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas is unavailable');
+  context.drawImage(bitmap, source.x, source.y, source.width, source.height, 0, 0, canvas.width, canvas.height);
+  const type = item.mimeType === 'image/jpeg' || item.mimeType === 'image/jpg' ? 'image/jpeg' : 'image/png';
+  const exported = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((value) => (value ? resolve(value) : reject(new Error('Could not export image'))), type, 0.92);
+  });
+  bitmap.close();
+  const extension = type === 'image/jpeg' ? 'jpg' : 'png';
+  const url = URL.createObjectURL(exported);
+  triggerDownload(url, `${fileBaseName(item.name)}-${canvas.width}x${canvas.height}.${extension}`);
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+function cropToSourceRect(crop: CropRect, width: number, height: number): { x: number; y: number; width: number; height: number } {
+  return {
+    x: Math.round(crop.x * width),
+    y: Math.round(crop.y * height),
+    width: Math.max(1, Math.round(crop.width * width)),
+    height: Math.max(1, Math.round(crop.height * height)),
+  };
+}
+
+function fileBaseName(name: string): string {
+  return name.replace(/\.[^.]+$/, '').replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_') || 'export';
 }
 
 

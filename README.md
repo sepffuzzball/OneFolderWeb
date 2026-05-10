@@ -13,6 +13,7 @@ A self-hosted web version of the OneFolder idea: your image and video files stay
 - Detail view by double-clicking or pressing Enter after selecting an item.
 - `Ctrl+C`/`Cmd+C` copies selected media through the browser clipboard when supported, with link fallback.
 - Share-link copy for a media item or the current filter state with UTM query parameters.
+- Single-file downloads, multi-select ZIP downloads, and scaled/cropped image exports.
 - Soft delete moves files to a persistent trash folder instead of deleting from disk.
 - Filesystem scanning for direct uploads and thumbnail creation.
 - Public-instance controls through `READ_ONLY`, `BLACKLISTED_TAGS`, and `HIDE_EMPTY_FOLDERS`.
@@ -36,7 +37,7 @@ Persistent volumes:
 Environment variables:
 
 - `SITE_NAME="Reference Library"`: display name shown in the app header.
-- `HOST=0.0.0.0`: bind address for the web server. Use `0.0.0.0` to allow access from other devices on your network.
+- `HOST=0.0.0.0`: bind address for the web server. The default is `0.0.0.0` so other devices on your network can reach it; use `localhost` to restrict access to the local machine.
 - `PORT=4317`: server port. Also update the Docker port mapping, for example `8080:8080`, if you change this in Docker.
 - `READ_ONLY=true`: disables uploads, folder creation, settings edits, and metadata writes.
 - `DEFAULT_READ_ONLY_VIEW=masonry-vertical`: first view used for read-only visitors. Supports `list`, `grid`, `masonry-vertical`, `masonry-horizontal`, and `calendar`.

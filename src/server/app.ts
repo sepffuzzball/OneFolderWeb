@@ -31,6 +31,7 @@ import type {
   AppSettings,
   CreateFolderRequest,
   DeleteMediaRequest,
+  MediaItem,
   MediaQuery,
   MoveMediaRequest,
   RenameTagRequest,
@@ -307,6 +308,41 @@ export async function createApp(): Promise<express.Express> {
     }),
   );
 
+  app.get(
+    '/download/:id',
+    asyncHandler(async (req, res) => {
+      const item = findMedia(String(req.params.id));
+      const filePath = item ? await resolveMediaPath(item.id) : undefined;
+      if (!item || !filePath || !fs.existsSync(filePath)) {
+        res.status(404).end();
+        return;
+      }
+      res.download(filePath, item.name);
+    }),
+  );
+
+  app.get(
+    '/api/download',
+    asyncHandler(async (req, res) => {
+      const ids = typeof req.query.ids === 'string' ? req.query.ids.split(',').filter(Boolean) : [];
+      const files: Array<{ item: MediaItem; filePath: string }> = [];
+      for (const id of ids) {
+        const item = findMedia(id);
+        const filePath = item ? await resolveMediaPath(item.id) : undefined;
+        if (item && filePath && fs.existsSync(filePath)) files.push({ item, filePath });
+      }
+      if (files.length === 0) {
+        res.status(404).json({ error: 'No downloadable files found.' });
+        return;
+      }
+      if (files.length === 1) {
+        res.download(files[0].filePath, files[0].item.name);
+        return;
+      }
+      await sendZipDownload(res, files);
+    }),
+  );
+
   await attachFrontend(app);
   attachScanner();
 
@@ -341,6 +377,145 @@ function boundedNumber(value: unknown, fallback: number, min: number, max: numbe
 
 function hasTagExpressionOperators(value: string): boolean {
   return /[(),]|\b(?:and|or)\b/i.test(value);
+}
+
+async function sendZipDownload(res: Response, files: Array<{ item: MediaItem; filePath: string }>): Promise<void> {
+  res.status(200);
+  res.type('application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${zipName()}"`);
+
+  const centralDirectory: Buffer[] = [];
+  const usedNames = new Set<string>();
+  let offset = 0;
+
+  for (const file of files) {
+    const stat = await fs.promises.stat(file.filePath);
+    if (stat.size > 0xffffffff) throw new Error(`${file.item.name} is too large for standard ZIP download.`);
+    const crc = await crc32File(file.filePath);
+    const name = uniqueZipEntryName(file.item.relativePath || file.item.name, usedNames);
+    const nameBuffer = Buffer.from(name, 'utf8');
+    const { time, date } = zipDateTime(stat.mtime);
+    const localHeader = zipLocalHeader(nameBuffer, crc, stat.size, time, date);
+    res.write(localHeader);
+
+    const entryOffset = offset;
+    offset += localHeader.length;
+    await streamFileToResponse(file.filePath, res);
+    offset += stat.size;
+
+    centralDirectory.push(zipCentralDirectoryHeader(nameBuffer, crc, stat.size, time, date, entryOffset));
+  }
+
+  const centralOffset = offset;
+  const centralSize = centralDirectory.reduce((total, header) => total + header.length, 0);
+  for (const header of centralDirectory) res.write(header);
+  res.end(zipEndOfCentralDirectory(centralDirectory.length, centralSize, centralOffset));
+}
+
+function zipName(): string {
+  return `onefolder-${new Date().toISOString().slice(0, 10)}.zip`;
+}
+
+function uniqueZipEntryName(relativePath: string, usedNames: Set<string>): string {
+  const clean = normalizeZipPath(relativePath);
+  let candidate = clean;
+  let index = 1;
+  while (usedNames.has(candidate.toLowerCase())) {
+    const parsed = path.parse(clean);
+    candidate = normalizeZipPath(path.join(parsed.dir, `${parsed.name}-${index}${parsed.ext}`));
+    index += 1;
+  }
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
+}
+
+function normalizeZipPath(value: string): string {
+  return value.replace(/\\/g, '/').split('/').map(safeFileName).filter(Boolean).join('/') || 'download';
+}
+
+function zipLocalHeader(name: Buffer, crc: number, size: number, time: number, date: number): Buffer {
+  const header = Buffer.alloc(30 + name.length);
+  header.writeUInt32LE(0x04034b50, 0);
+  header.writeUInt16LE(20, 4);
+  header.writeUInt16LE(0x0800, 6);
+  header.writeUInt16LE(0, 8);
+  header.writeUInt16LE(time, 10);
+  header.writeUInt16LE(date, 12);
+  header.writeUInt32LE(crc, 14);
+  header.writeUInt32LE(size, 18);
+  header.writeUInt32LE(size, 22);
+  header.writeUInt16LE(name.length, 26);
+  header.writeUInt16LE(0, 28);
+  name.copy(header, 30);
+  return header;
+}
+
+function zipCentralDirectoryHeader(name: Buffer, crc: number, size: number, time: number, date: number, offset: number): Buffer {
+  const header = Buffer.alloc(46 + name.length);
+  header.writeUInt32LE(0x02014b50, 0);
+  header.writeUInt16LE(20, 4);
+  header.writeUInt16LE(20, 6);
+  header.writeUInt16LE(0x0800, 8);
+  header.writeUInt16LE(0, 10);
+  header.writeUInt16LE(time, 12);
+  header.writeUInt16LE(date, 14);
+  header.writeUInt32LE(crc, 16);
+  header.writeUInt32LE(size, 20);
+  header.writeUInt32LE(size, 24);
+  header.writeUInt16LE(name.length, 28);
+  header.writeUInt16LE(0, 30);
+  header.writeUInt16LE(0, 32);
+  header.writeUInt16LE(0, 34);
+  header.writeUInt16LE(0, 36);
+  header.writeUInt32LE(0, 38);
+  header.writeUInt32LE(offset, 42);
+  name.copy(header, 46);
+  return header;
+}
+
+function zipEndOfCentralDirectory(entries: number, centralSize: number, centralOffset: number): Buffer {
+  const header = Buffer.alloc(22);
+  header.writeUInt32LE(0x06054b50, 0);
+  header.writeUInt16LE(0, 4);
+  header.writeUInt16LE(0, 6);
+  header.writeUInt16LE(entries, 8);
+  header.writeUInt16LE(entries, 10);
+  header.writeUInt32LE(centralSize, 12);
+  header.writeUInt32LE(centralOffset, 16);
+  header.writeUInt16LE(0, 20);
+  return header;
+}
+
+function zipDateTime(date: Date): { time: number; date: number } {
+  const year = Math.max(1980, date.getFullYear());
+  return {
+    time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+    date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+  };
+}
+
+async function crc32File(filePath: string): Promise<number> {
+  let crc = 0xffffffff;
+  for await (const chunk of fs.createReadStream(filePath)) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    for (const byte of buffer) crc = crc32Table[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+const crc32Table = Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+  return value >>> 0;
+});
+
+function streamFileToResponse(filePath: string, res: Response): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', reject);
+    stream.on('end', resolve);
+    stream.pipe(res, { end: false });
+  });
 }
 
 function attachScanner() {
