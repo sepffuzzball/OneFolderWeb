@@ -93,6 +93,12 @@ export function App() {
     window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 3200);
   }, []);
 
+  useEffect(() => {
+    if (!config) return;
+    document.title = config.siteName;
+    updateFavicon(config.siteImageUrl);
+  }, [config]);
+
   const buildMediaParams = useCallback(
     (offset: number, limit: number) => {
       const params = new URLSearchParams();
@@ -448,7 +454,7 @@ export function App() {
     >
       <aside className="sidebar">
         <div className="brand">
-          <Sparkles size={22} />
+          {config?.siteImageUrl ? <img src={config.siteImageUrl} alt="" /> : <Sparkles size={22} />}
           <div>
             <strong>{config?.siteName ?? 'OneFolder Web'}</strong>
             <span>v{config?.version ?? '...'}</span>
@@ -1407,6 +1413,14 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 
 function absoluteUrl(pathname: string): string {
   return new URL(pathname, window.location.origin).toString();
+}
+
+function updateFavicon(siteImageUrl: string) {
+  if (!siteImageUrl) return;
+  const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]') ?? document.createElement('link');
+  favicon.rel = 'icon';
+  favicon.href = siteImageUrl;
+  if (!favicon.parentElement) document.head.appendChild(favicon);
 }
 
 function triggerDownload(url: string, filename?: string) {

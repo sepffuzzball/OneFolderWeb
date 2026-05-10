@@ -17,6 +17,7 @@ export type AppSettings = {
 export type RuntimeConfig = {
   version: string;
   siteName: string;
+  siteImageUrl: string;
   readOnly: boolean;
   blacklistedTags: string[];
   hideEmptyFolders: boolean;

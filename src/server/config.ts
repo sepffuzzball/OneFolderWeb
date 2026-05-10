@@ -58,6 +58,7 @@ export const paths = {
 export const runtimeConfig: RuntimeConfig = {
   version: packageVersion(),
   siteName: process.env.SITE_NAME?.trim() || 'OneFolder Web',
+  siteImageUrl: process.env.SITE_IMAGE_URL?.trim() || process.env.FAVICON_URL?.trim() || '',
   readOnly: boolFromEnv('READ_ONLY', false),
   blacklistedTags: listFromEnv('BLACKLISTED_TAGS'),
   hideEmptyFolders: boolFromEnv('HIDE_EMPTY_FOLDERS', false),

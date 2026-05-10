@@ -37,6 +37,7 @@ Persistent volumes:
 Environment variables:
 
 - `SITE_NAME="Reference Library"`: display name shown in the app header.
+- `SITE_IMAGE_URL=https://example.com/icon.png`: image used for the sidebar mark and browser favicon. `FAVICON_URL` is also accepted as an alias.
 - `HOST=0.0.0.0`: bind address for the web server. The default is `0.0.0.0` so other devices on your network can reach it; use `localhost` to restrict access to the local machine.
 - `PORT=4317`: server port. Also update the Docker port mapping, for example `8080:8080`, if you change this in Docker.
 - `READ_ONLY=true`: disables uploads, folder creation, settings edits, and metadata writes.
