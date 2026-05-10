@@ -428,12 +428,14 @@ textarea {
 }
 
 .tile[draggable="true"],
-.list-row[draggable="true"] {
+.list-row[draggable="true"],
+.folder-tree button[draggable="true"] {
   cursor: grab;
 }
 
 .tile[draggable="true"]:active,
-.list-row[draggable="true"]:active {
+.list-row[draggable="true"]:active,
+.folder-tree button[draggable="true"]:active {
   cursor: grabbing;
 }
 

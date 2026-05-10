@@ -116,6 +116,13 @@ export type MoveMediaRequest = {
   targetPath?: string;
 };
 
+export type MoveFolderRequest = {
+  libraryId: string;
+  sourcePath: string;
+  targetLibraryId: string;
+  targetPath?: string;
+};
+
 export type DeleteMediaRequest = {
   ids: string[];
 };

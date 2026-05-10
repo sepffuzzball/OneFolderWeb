@@ -15,6 +15,7 @@ import {
   initializeIndex,
   listKnownTags,
   listTagSummaries,
+  moveFolder,
   moveMedia,
   normalizeTag,
   removeTagEverywhere,
@@ -33,6 +34,7 @@ import type {
   DeleteMediaRequest,
   MediaItem,
   MediaQuery,
+  MoveFolderRequest,
   MoveMediaRequest,
   RenameTagRequest,
   TagCatalogUpdateRequest,
@@ -267,6 +269,19 @@ export async function createApp(): Promise<express.Express> {
         return;
       }
       res.json({ data: await moveMedia(payload) });
+    }),
+  );
+
+  app.post(
+    '/api/folders/move',
+    ensureWritable,
+    asyncHandler(async (req, res) => {
+      const payload = req.body as MoveFolderRequest;
+      if (!payload.libraryId || !payload.sourcePath || !payload.targetLibraryId) {
+        res.status(400).json({ error: 'Source and target folders are required.' });
+        return;
+      }
+      res.json({ data: await moveFolder(payload) });
     }),
   );
 

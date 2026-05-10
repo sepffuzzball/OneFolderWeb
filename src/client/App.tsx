@@ -31,6 +31,7 @@ type ExportAspect = 'original' | '16:9' | '16:10' | '1:1';
 type CropRect = { x: number; y: number; width: number; height: number };
 type CropHandle = 'nw' | 'ne' | 'sw' | 'se';
 type DetailFitMode = 'contain' | 'cover';
+type DraggedFolder = { libraryId: string; path: string };
 const MEDIA_PAGE_SIZE = 240;
 
 const viewOptions: Array<{ id: ViewMode; label: string; icon: typeof Grid2X2 }> = [
@@ -299,6 +300,25 @@ export function App() {
     await load();
   };
 
+  const moveFolder = async (folder: DraggedFolder, target: { libraryId: string; folder?: string }) => {
+    if (config?.readOnly || !folder.path) return;
+    const result = await api<{ relativePath: string }>('/api/folders/move', {
+      method: 'POST',
+      body: JSON.stringify({
+        libraryId: folder.libraryId,
+        sourcePath: folder.path,
+        targetLibraryId: target.libraryId,
+        targetPath: target.folder ?? '',
+      }),
+    });
+    if (folderFilter.libraryId === folder.libraryId && folderFilter.folder && isSameOrChildFolder(folderFilter.folder, folder.path)) {
+      const suffix = folderFilter.folder === folder.path ? '' : folderFilter.folder.slice(folder.path.length + 1);
+      setFolderFilter({ libraryId: target.libraryId, folder: suffix ? `${result.relativePath}/${suffix}` : result.relativePath });
+    }
+    notify('Folder moved');
+    await load();
+  };
+
   const deleteItems = async (idsToDelete = selectedIds) => {
     if (idsToDelete.length === 0 || config?.readOnly) return;
     const confirmed = window.confirm(`Move ${idsToDelete.length === 1 ? 'this file' : `${idsToDelete.length} files`} to trash?`);
@@ -483,6 +503,7 @@ export function App() {
                 setFolderFilter(next);
               }}
               onMove={moveItems}
+              onMoveFolder={moveFolder}
             />
             <div className="sidebar-actions">
               <div className="inline-input">
@@ -667,18 +688,20 @@ function FolderTree({
   readOnly,
   onSelect,
   onMove,
+  onMoveFolder,
 }: {
   nodes: FolderNode[];
   selected: { libraryId?: string; folder?: string };
   readOnly: boolean;
   onSelect: (next: { libraryId?: string; folder?: string }) => void;
   onMove: (ids: string[], target: { libraryId: string; folder?: string }) => Promise<void>;
+  onMoveFolder: (folder: DraggedFolder, target: { libraryId: string; folder?: string }) => Promise<void>;
 }) {
   return (
     <nav className="folder-tree">
       <button className={!selected.libraryId && !selected.folder ? 'selected' : ''} onClick={() => onSelect({})}>All libraries</button>
       {nodes.map((node) => (
-        <FolderNodeView key={node.id} node={node} selected={selected} readOnly={readOnly} onSelect={onSelect} onMove={onMove} />
+        <FolderNodeView key={node.id} node={node} selected={selected} readOnly={readOnly} onSelect={onSelect} onMove={onMove} onMoveFolder={onMoveFolder} />
       ))}
     </nav>
   );
@@ -737,12 +760,14 @@ function FolderNodeView({
   readOnly,
   onSelect,
   onMove,
+  onMoveFolder,
 }: {
   node: FolderNode;
   selected: { libraryId?: string; folder?: string };
   readOnly: boolean;
   onSelect: (next: { libraryId?: string; folder?: string }) => void;
   onMove: (ids: string[], target: { libraryId: string; folder?: string }) => Promise<void>;
+  onMoveFolder: (folder: DraggedFolder, target: { libraryId: string; folder?: string }) => Promise<void>;
 }) {
   const isSelected = selected.libraryId === node.libraryId && (selected.folder ?? '') === node.relativePath;
   const [isDropTarget, setDropTarget] = useState(false);
@@ -750,31 +775,49 @@ function FolderNodeView({
     <div>
       <button
         className={`${isSelected ? 'selected' : ''} ${isDropTarget ? 'drop-target' : ''}`}
+        draggable={!readOnly && Boolean(node.relativePath)}
         style={{ paddingLeft: 12 + node.depth * 14 }}
+        onDragStart={(event) => {
+          if (!node.relativePath) return;
+          event.stopPropagation();
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('application/x-onefolder-folder', JSON.stringify({ libraryId: node.libraryId, path: node.relativePath } satisfies DraggedFolder));
+          event.dataTransfer.setData('text/plain', node.relativePath);
+        }}
         onClick={() => onSelect({ libraryId: node.libraryId, folder: node.relativePath })}
         onDragOver={(event) => {
-          if (readOnly || !event.dataTransfer.types.includes('application/x-onefolder-media')) return;
+          if (readOnly || !canDropOnFolder(event.dataTransfer, node)) return;
           event.preventDefault();
+          event.stopPropagation();
           event.dataTransfer.dropEffect = 'move';
           setDropTarget(true);
         }}
         onDragLeave={() => setDropTarget(false)}
         onDrop={(event) => {
           if (readOnly) return;
+          const rawFolder = event.dataTransfer.getData('application/x-onefolder-folder');
           const rawIds = event.dataTransfer.getData('application/x-onefolder-media');
-          if (!rawIds) return;
+          if (!rawIds && !rawFolder) return;
           event.preventDefault();
           event.stopPropagation();
           setDropTarget(false);
-          const ids = JSON.parse(rawIds) as string[];
-          void onMove(ids, { libraryId: node.libraryId, folder: node.relativePath });
+          if (rawFolder) {
+            const folder = parseDraggedFolder(rawFolder);
+            if (!folder) return;
+            if (canMoveFolderTo(folder, node)) void onMoveFolder(folder, { libraryId: node.libraryId, folder: node.relativePath });
+            return;
+          }
+          if (rawIds) {
+            const ids = JSON.parse(rawIds) as string[];
+            void onMove(ids, { libraryId: node.libraryId, folder: node.relativePath });
+          }
         }}
       >
         <span>{node.name}</span>
         <small>{node.itemCount}</small>
       </button>
       {node.children.map((child) => (
-        <FolderNodeView key={child.id} node={child} selected={selected} readOnly={readOnly} onSelect={onSelect} onMove={onMove} />
+        <FolderNodeView key={child.id} node={child} selected={selected} readOnly={readOnly} onSelect={onSelect} onMove={onMove} onMoveFolder={onMoveFolder} />
       ))}
     </div>
   );
@@ -1453,6 +1496,33 @@ function absoluteUrl(pathname: string): string {
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
+function canDropOnFolder(dataTransfer: DataTransfer, target: FolderNode): boolean {
+  if (dataTransfer.types.includes('application/x-onefolder-media')) return true;
+  const rawFolder = dataTransfer.getData('application/x-onefolder-folder');
+  if (!rawFolder) return dataTransfer.types.includes('application/x-onefolder-folder');
+  const folder = parseDraggedFolder(rawFolder);
+  return Boolean(folder && canMoveFolderTo(folder, target));
+}
+
+function canMoveFolderTo(folder: DraggedFolder, target: FolderNode): boolean {
+  if (!folder.path) return false;
+  if (folder.libraryId !== target.libraryId) return true;
+  return !isSameOrChildFolder(target.relativePath, folder.path);
+}
+
+function isSameOrChildFolder(value: string, parent: string): boolean {
+  return value === parent || value.startsWith(`${parent}/`);
+}
+
+function parseDraggedFolder(value: string): DraggedFolder | undefined {
+  try {
+    const parsed = JSON.parse(value) as Partial<DraggedFolder>;
+    return parsed.libraryId && parsed.path ? { libraryId: parsed.libraryId, path: parsed.path } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function updateFavicon(siteImageUrl: string) {

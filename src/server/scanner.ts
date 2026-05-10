@@ -302,6 +302,47 @@ export async function moveMedia(request: { ids: string[]; libraryId: string; tar
   return { moved };
 }
 
+export async function moveFolder(request: { libraryId: string; sourcePath: string; targetLibraryId: string; targetPath?: string }) {
+  const settings = await loadSettings();
+  const sourceLibrary = settings.libraries.find((item) => item.id === request.libraryId);
+  const targetLibrary = settings.libraries.find((item) => item.id === request.targetLibraryId);
+  if (!sourceLibrary || !targetLibrary) throw new Error('Library not found');
+
+  const sourceRelativePath = normalizeFolderPath(request.sourcePath);
+  const targetRelativePath = normalizeFolderPath(request.targetPath ?? '');
+  if (!sourceRelativePath) throw new Error('Cannot move a library root');
+
+  const sourcePath = path.resolve(sourceLibrary.path, sourceRelativePath);
+  if (!isPathInside(sourceLibrary.path, sourcePath)) throw new Error('Source folder escapes the library path');
+  const sourceStat = await fs.promises.stat(sourcePath).catch(() => undefined);
+  if (!sourceStat?.isDirectory()) throw new Error('Source folder not found');
+
+  const targetDir = path.resolve(targetLibrary.path, targetRelativePath);
+  if (!isPathInside(targetLibrary.path, targetDir)) throw new Error('Target folder escapes the library path');
+  if (sourceLibrary.id === targetLibrary.id && isSameOrChildPath(targetRelativePath, sourceRelativePath)) {
+    throw new Error('Cannot move a folder into itself');
+  }
+
+  const currentParent = normalizeFolderPath(path.dirname(sourceRelativePath));
+  if (sourceLibrary.id === targetLibrary.id && currentParent === targetRelativePath) {
+    return { relativePath: sourceRelativePath };
+  }
+
+  await fs.promises.mkdir(targetDir, { recursive: true });
+  const destinationPath = await uniquePath(path.join(targetDir, path.basename(sourceRelativePath)));
+  await moveDirectory(sourcePath, destinationPath);
+  await Promise.all(
+    cachedFiles
+      .filter((item) => item.libraryId === sourceLibrary.id && isSameOrChildPath(item.folder, sourceRelativePath))
+      .flatMap((item) => [
+        fs.promises.rm(thumbnailPathFor(item.id, 'grid'), { force: true }).catch(() => undefined),
+        fs.promises.rm(thumbnailPathFor(item.id, 'preview'), { force: true }).catch(() => undefined),
+      ]),
+  );
+  await scanLibraries();
+  return { relativePath: normalizeSlashes(path.relative(targetLibrary.path, destinationPath)) };
+}
+
 export async function trashMedia(request: { ids: string[] }) {
   const files = cachedFiles.filter((item) => request.ids.includes(item.id));
   const trashed: string[] = [];
@@ -505,6 +546,34 @@ function filterBlacklisted(files: MediaItem[]): MediaItem[] {
 function isPathInside(root: string, target: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(target));
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function normalizeFolderPath(value: string): string {
+  const normalized = normalizeSlashes(value).replace(/^\/+|\/+$/g, '');
+  return normalized === '.' ? '' : normalized;
+}
+
+function isSameOrChildPath(value: string, parent: string): boolean {
+  const normalizedValue = normalizeFolderPath(value);
+  const normalizedParent = normalizeFolderPath(parent);
+  return normalizedValue === normalizedParent || normalizedValue.startsWith(`${normalizedParent}/`);
+}
+
+async function moveDirectory(source: string, destination: string): Promise<void> {
+  try {
+    await fs.promises.rename(source, destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+    const pendingDestination = await uniquePath(path.join(path.dirname(destination), `.moving-${path.basename(destination)}`));
+    try {
+      await fs.promises.cp(source, pendingDestination, { recursive: true, errorOnExist: true, force: false });
+      await fs.promises.rename(pendingDestination, destination);
+      await fs.promises.rm(source, { recursive: true, force: true });
+    } catch (copyError) {
+      await fs.promises.rm(pendingDestination, { recursive: true, force: true });
+      throw copyError;
+    }
+  }
 }
 
 function tagMatchesFilter(filter: string, itemTag: string): boolean {
