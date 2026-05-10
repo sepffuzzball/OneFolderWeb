@@ -4,6 +4,6 @@ import { createApp } from './app.js';
 await ensureStorageDirs();
 const app = await createApp();
 
-app.listen(serverConfig.port, () => {
-  console.log(`OneFolder Web listening on http://localhost:${serverConfig.port}`);
+app.listen(serverConfig.port, serverConfig.host, () => {
+  console.log(`${serverConfig.host}:${serverConfig.port} is serving OneFolder Web`);
 });

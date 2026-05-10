@@ -5,6 +5,9 @@ services:
     ports:
       - "4317:4317"
     environment:
+      SITE_NAME: "OneFolder Web"
+      HOST: "0.0.0.0"
+      PORT: "4317"
       READ_ONLY: "false"
       BLACKLISTED_TAGS: ""
       HIDE_EMPTY_FOLDERS: "false"

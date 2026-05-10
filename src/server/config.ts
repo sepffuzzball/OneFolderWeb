@@ -57,6 +57,7 @@ export const paths = {
 
 export const runtimeConfig: RuntimeConfig = {
   version: packageVersion(),
+  siteName: process.env.SITE_NAME?.trim() || 'OneFolder Web',
   readOnly: boolFromEnv('READ_ONLY', false),
   blacklistedTags: listFromEnv('BLACKLISTED_TAGS'),
   hideEmptyFolders: boolFromEnv('HIDE_EMPTY_FOLDERS', false),
@@ -67,6 +68,7 @@ export const runtimeConfig: RuntimeConfig = {
 };
 
 export const serverConfig = {
+  host: process.env.HOST?.trim() || 'localhost',
   port: numberFromEnv('PORT', 4317),
   scanIntervalMs: numberFromEnv('SCAN_INTERVAL_MS', 15_000),
 };

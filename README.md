@@ -35,6 +35,9 @@ Persistent volumes:
 
 Environment variables:
 
+- `SITE_NAME="Reference Library"`: display name shown in the app header.
+- `HOST=0.0.0.0`: bind address for the web server. Use `0.0.0.0` to allow access from other devices on your network.
+- `PORT=4317`: server port. Also update the Docker port mapping, for example `8080:8080`, if you change this in Docker.
 - `READ_ONLY=true`: disables uploads, folder creation, settings edits, and metadata writes.
 - `DEFAULT_READ_ONLY_VIEW=masonry-vertical`: first view used for read-only visitors. Supports `list`, `grid`, `masonry-vertical`, `masonry-horizontal`, and `calendar`.
 - `BLACKLISTED_TAGS=AI,artist-name`: hides any media with one of these tags.

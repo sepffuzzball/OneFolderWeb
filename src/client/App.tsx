@@ -431,7 +431,7 @@ export function App() {
         <div className="brand">
           <Sparkles size={22} />
           <div>
-            <strong>OneFolder Web</strong>
+            <strong>{config?.siteName ?? 'OneFolder Web'}</strong>
             <span>v{config?.version ?? '...'}</span>
           </div>
         </div>
