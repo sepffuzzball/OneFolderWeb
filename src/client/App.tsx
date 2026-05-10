@@ -30,6 +30,7 @@ type TagSortMode = 'alpha' | 'count';
 type ExportAspect = 'original' | '16:9' | '16:10' | '1:1';
 type CropRect = { x: number; y: number; width: number; height: number };
 type CropHandle = 'nw' | 'ne' | 'sw' | 'se';
+type DetailFitMode = 'contain' | 'cover';
 const MEDIA_PAGE_SIZE = 240;
 
 const viewOptions: Array<{ id: ViewMode; label: string; icon: typeof Grid2X2 }> = [
@@ -182,6 +183,7 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (isEditableTarget(event.target)) return;
       if (event.key === 'Enter' && selectedIds.length === 1 && !activeId) {
         event.preventDefault();
         setActiveId(selectedIds[0]);
@@ -484,7 +486,20 @@ export function App() {
             />
             <div className="sidebar-actions">
               <div className="inline-input">
-                <input value={folderDraft} onFocus={leaveTagManager} onChange={(event) => setFolderDraft(event.target.value)} placeholder="New folder" disabled={config?.readOnly} />
+                <input
+                  value={folderDraft}
+                  onFocus={leaveTagManager}
+                  onChange={(event) => setFolderDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      leaveTagManager();
+                      void createFolder();
+                    }
+                  }}
+                  placeholder="New folder"
+                  disabled={config?.readOnly}
+                />
                 <button title="Create folder" onClick={() => {
                   leaveTagManager();
                   void createFolder();
@@ -815,7 +830,18 @@ function BulkBar(props: {
   return (
     <div className="bulkbar">
       <strong>{props.selectedItems.length} selected</strong>
-      <input value={props.tagDraft} onChange={(event) => props.onTagDraft(event.target.value)} placeholder="Comma-separated tags" disabled={props.readOnly} />
+      <input
+        value={props.tagDraft}
+        onChange={(event) => props.onTagDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            if (!props.readOnly) void props.onApplyTags('add');
+          }
+        }}
+        placeholder="Comma-separated tags"
+        disabled={props.readOnly}
+      />
       <input value={props.descriptionDraft} onChange={(event) => props.onDescriptionDraft(event.target.value)} placeholder="Description for selected files" disabled={props.readOnly} />
       <button onClick={() => props.onApplyTags('add')} disabled={props.readOnly}><Tags size={16} />Add</button>
       <button onClick={() => props.onApplyTags('replace')} disabled={props.readOnly}><Check size={16} />Replace</button>
@@ -1183,16 +1209,18 @@ function DetailView(props: {
 }) {
   const [fullLoaded, setFullLoaded] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [fitMode, setFitMode] = useState<DetailFitMode>('contain');
 
   useEffect(() => {
     setFullLoaded(false);
+    setFitMode('contain');
   }, [props.item.id]);
 
   return (
     <section className="detail" onClick={props.onClose}>
       <div className="detail-surface" onClick={(event) => event.stopPropagation()}>
         <button className="close" onClick={props.onClose}>x</button>
-        <div className={`preview ${fullLoaded ? 'loaded' : 'loading'}`}>
+        <div className={`preview fit-${fitMode} ${fullLoaded ? 'loaded' : 'loading'}`}>
           {!fullLoaded && props.item.kind === 'image' && (
             <img className="preview-thumb" src={props.item.previewThumbnailUrl} alt="" aria-hidden="true" />
           )}
@@ -1205,7 +1233,14 @@ function DetailView(props: {
           {props.item.kind === 'video' ? (
             <video src={props.item.fileUrl} controls autoPlay onLoadedData={() => setFullLoaded(true)} />
           ) : (
-            <img className="preview-full" src={props.item.fileUrl} alt={props.item.name} onLoad={() => setFullLoaded(true)} />
+            <img
+              className="preview-full"
+              src={props.item.fileUrl}
+              alt={props.item.name}
+              title={fitMode === 'contain' ? 'Show cropped fill' : 'Show entire image'}
+              onClick={() => setFitMode((mode) => (mode === 'contain' ? 'cover' : 'contain'))}
+              onLoad={() => setFullLoaded(true)}
+            />
           )}
         </div>
         <aside>
@@ -1413,6 +1448,11 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 
 function absoluteUrl(pathname: string): string {
   return new URL(pathname, window.location.origin).toString();
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
 }
 
 function updateFavicon(siteImageUrl: string) {
