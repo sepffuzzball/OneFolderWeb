@@ -22,6 +22,5 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/package.json ./package.json
-VOLUME ["/data/library", "/data/settings", "/data/thumbnails", "/data/backups", "/data/trash"]
 EXPOSE 4317
 CMD ["node", "dist/server/server/index.js"]

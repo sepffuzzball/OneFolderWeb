@@ -34,6 +34,8 @@ Persistent volumes:
 - `/data/backups`: timestamped JSON backups
 - `/data/trash`: soft-deleted media, preserving library-relative paths
 
+For Kubernetes, mount a single PVC at `/data` when the storage backend is NFS or CephFS. The app creates and uses the subdirectories above; avoid mounting additional volumes at nested paths such as `/data/backups` or `/data/trash` under the same PVC mount.
+
 Environment variables:
 
 - `SITE_NAME="Reference Library"`: display name shown in the app header.
