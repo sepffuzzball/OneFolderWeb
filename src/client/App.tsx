@@ -31,6 +31,7 @@ type ExportAspect = 'original' | '16:9' | '16:10' | '1:1';
 type CropRect = { x: number; y: number; width: number; height: number };
 type CropHandle = 'nw' | 'ne' | 'sw' | 'se';
 type DetailFitMode = 'contain' | 'cover';
+type Size = { width: number; height: number };
 type DraggedFolder = { libraryId: string; path: string };
 const MEDIA_PAGE_SIZE = 240;
 
@@ -1253,17 +1254,35 @@ function DetailView(props: {
   const [fullLoaded, setFullLoaded] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [fitMode, setFitMode] = useState<DetailFitMode>('contain');
+  const [naturalSize, setNaturalSize] = useState<Size | null>(imageItemSize(props.item));
+  const [previewSize, setPreviewSize] = useState<Size | null>(null);
+  const previewRef = useRef<HTMLDivElement | null>(null);
+  const detailImageStyle = naturalSize && previewSize ? detailImageBox(naturalSize, previewSize, fitMode) : undefined;
 
   useEffect(() => {
     setFullLoaded(false);
     setFitMode('contain');
+    setNaturalSize(imageItemSize(props.item));
   }, [props.item.id]);
+
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview) return;
+    const updatePreviewSize = () => {
+      const rect = preview.getBoundingClientRect();
+      setPreviewSize({ width: rect.width, height: rect.height });
+    };
+    updatePreviewSize();
+    const observer = new ResizeObserver(updatePreviewSize);
+    observer.observe(preview);
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <section className="detail" onClick={props.onClose}>
       <div className="detail-surface" onClick={(event) => event.stopPropagation()}>
         <button className="close" onClick={props.onClose}>x</button>
-        <div className={`preview fit-${fitMode} ${fullLoaded ? 'loaded' : 'loading'}`}>
+        <div ref={previewRef} className={`preview fit-${fitMode} ${fullLoaded ? 'loaded' : 'loading'}`}>
           {!fullLoaded && props.item.kind === 'image' && (
             <img className="preview-thumb" src={props.item.previewThumbnailUrl} alt="" aria-hidden="true" />
           )}
@@ -1280,9 +1299,13 @@ function DetailView(props: {
               className="preview-full"
               src={props.item.fileUrl}
               alt={props.item.name}
+              style={detailImageStyle}
               title={fitMode === 'contain' ? 'Show cropped fill' : 'Show entire image'}
               onClick={() => setFitMode((mode) => (mode === 'contain' ? 'cover' : 'contain'))}
-              onLoad={() => setFullLoaded(true)}
+              onLoad={(event) => {
+                setNaturalSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight });
+                setFullLoaded(true);
+              }}
             />
           )}
         </div>
@@ -1496,6 +1519,22 @@ function absoluteUrl(pathname: string): string {
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
+function imageItemSize(item: MediaItem): Size | null {
+  return item.width && item.height ? { width: item.width, height: item.height } : null;
+}
+
+function detailImageBox(image: Size, preview: Size, mode: DetailFitMode): { width: string; height: string } {
+  const imageRatio = image.width / image.height || 1;
+  const previewRatio = preview.width / preview.height || 1;
+  const fitByWidth = mode === 'contain' ? imageRatio >= previewRatio : imageRatio < previewRatio;
+  const width = fitByWidth ? preview.width : preview.height * imageRatio;
+  const height = fitByWidth ? preview.width / imageRatio : preview.height;
+  return {
+    width: `${Math.max(1, Math.round(width))}px`,
+    height: `${Math.max(1, Math.round(height))}px`,
+  };
 }
 
 function canDropOnFolder(dataTransfer: DataTransfer, target: FolderNode): boolean {
