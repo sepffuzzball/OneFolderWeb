@@ -204,6 +204,11 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && activeId) {
+        event.preventDefault();
+        setActiveId(null);
+        return;
+      }
       if (isEditableTarget(event.target)) return;
       if (activeId && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
         event.preventDefault();
@@ -214,7 +219,6 @@ export function App() {
         event.preventDefault();
         setActiveId(selectedIds[0]);
       }
-      if (event.key === 'Escape') setActiveId(null);
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c' && selectedIds.length > 0) {
         event.preventDefault();
         void copySelectedFiles();
