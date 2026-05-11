@@ -1,6 +1,6 @@
 {
   "name": "onefolder-web",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "A self-hosted web UI for browsing, tagging, and sharing OneFolder-style media libraries.",
   "type": "module",
   "license": "MIT",
