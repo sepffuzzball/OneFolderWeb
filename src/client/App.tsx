@@ -169,6 +169,23 @@ export function App() {
     }
   }, [buildMediaParams, isLoadingLibrary, items, mediaTotal]);
 
+  const navigateActiveItem = useCallback(
+    (direction: -1 | 1) => {
+      if (!activeId) return;
+      const currentIndex = items.findIndex((item) => item.id === activeId);
+      if (currentIndex === -1) return;
+      const nextItem = items[currentIndex + direction];
+      if (!nextItem) return;
+      selectionAnchorId.current = nextItem.id;
+      setSelectedIds([nextItem.id]);
+      setDescriptionDraft(nextItem.description);
+      setTagDraft('');
+      setActiveId(nextItem.id);
+      if (direction > 0 && items.length < mediaTotal && currentIndex >= items.length - 3) void prefetchMoreMedia();
+    },
+    [activeId, items, mediaTotal, prefetchMoreMedia],
+  );
+
   useEffect(() => {
     void load();
     const timer = window.setInterval(() => void load(), 15_000);
@@ -186,6 +203,11 @@ export function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (isEditableTarget(event.target)) return;
+      if (activeId && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        event.preventDefault();
+        navigateActiveItem(event.key === 'ArrowLeft' ? -1 : 1);
+        return;
+      }
       if (event.key === 'Enter' && selectedIds.length === 1 && !activeId) {
         event.preventDefault();
         setActiveId(selectedIds[0]);
@@ -198,7 +220,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeId, selectedIds]);
+  }, [activeId, navigateActiveItem, selectedIds]);
 
   const selectItem = (item: MediaItem, event?: React.MouseEvent) => {
     setActiveId(null);
@@ -224,6 +246,7 @@ export function App() {
   const openItem = (item: MediaItem) => {
     setSelectedIds([item.id]);
     setDescriptionDraft(item.description);
+    setTagDraft('');
     setActiveId(item.id);
   };
 
