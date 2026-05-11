@@ -560,13 +560,6 @@ export function App() {
                   if (event.target.files) void uploadFiles(event.target.files);
                 }} />
               </label>
-              <button className="ghost-button" onClick={() => {
-                leaveTagManager();
-                setSettingsOpen((open) => !open);
-              }}>
-                <Settings size={17} />
-                Settings
-              </button>
             </div>
           </>
         ) : (
@@ -594,28 +587,36 @@ export function App() {
             <input value={tagFilter} onFocus={leaveTagManager} onChange={(event) => setTagFilter(event.target.value)} placeholder="Tags: (dog OR cat) AND food" list="known-tags" />
             <datalist id="known-tags">{allTags.map((tag) => <option key={tag} value={tag} label={displayTag(tag)} />)}</datalist>
           </div>
-          <div className="view-switcher">
-            {viewOptions.map((option) => {
-              const Icon = option.icon;
-              return (
-                <button key={option.id} title={option.label} className={view === option.id ? 'active' : ''} onClick={() => {
-                  leaveTagManager();
-                  setView(option.id);
-                }}>
-                  <Icon size={18} />
-                </button>
-              );
-            })}
+          <div className="toolbar-actions">
+            <div className="view-switcher">
+              {viewOptions.map((option) => {
+                const Icon = option.icon;
+                return (
+                  <button key={option.id} title={option.label} className={view === option.id ? 'active' : ''} onClick={() => {
+                    leaveTagManager();
+                    setView(option.id);
+                  }}>
+                    <Icon size={18} />
+                  </button>
+                );
+              })}
+            </div>
+            <button title="Settings" className={settingsOpen ? 'active' : ''} onClick={() => {
+              leaveTagManager();
+              setSettingsOpen((open) => !open);
+            }}>
+              <Settings size={18} />
+            </button>
+            <button title="Tag manager" className={tagManagerOpen ? 'active' : ''} onClick={() => setTagManagerOpen((open) => !open)}>
+              <Tags size={18} />
+            </button>
+            <button title="Copy filter link" onClick={() => {
+              leaveTagManager();
+              void copyShareLink();
+            }}>
+              <Link size={18} />
+            </button>
           </div>
-          <button title="Tag manager" className={tagManagerOpen ? 'active' : ''} onClick={() => setTagManagerOpen((open) => !open)}>
-            <Tags size={18} />
-          </button>
-          <button title="Copy filter link" onClick={() => {
-            leaveTagManager();
-            void copyShareLink();
-          }}>
-            <Link size={18} />
-          </button>
         </header>
 
         <IndexStatusBar status={indexStatus} isLoading={isLoadingLibrary} isPrefetching={isPrefetchingMedia} visibleCount={items.length} totalCount={mediaTotal} />

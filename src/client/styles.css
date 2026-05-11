@@ -253,15 +253,15 @@ textarea {
 
 .inline-input button,
 .view-switcher button,
-.toolbar > button {
+.toolbar-actions > button {
   display: inline-grid;
   width: 40px;
+  flex: 0 0 auto;
   place-items: center;
   border-radius: 6px;
 }
 
-.upload-button,
-.ghost-button {
+.upload-button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -286,7 +286,7 @@ textarea {
 
 .toolbar {
   display: grid;
-  grid-template-columns: minmax(240px, 1.35fr) minmax(180px, 0.8fr) auto auto auto;
+  grid-template-columns: minmax(240px, 1.35fr) minmax(180px, 0.8fr) auto;
   gap: 10px;
   align-items: center;
   border-bottom: 1px solid #292d34;
@@ -317,8 +317,16 @@ textarea {
   gap: 4px;
 }
 
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+
 .view-switcher button.active,
-.toolbar > button.active {
+.toolbar-actions > button.active {
   background: #38506f;
   border-color: #5f7da7;
 }
@@ -1211,8 +1219,24 @@ button.crop-box:focus {
     grid-template-columns: 1fr;
   }
 
+  .toolbar {
+    padding-inline: 10px;
+  }
+
   .view-switcher {
-    flex-wrap: wrap;
+    flex: 0 0 auto;
+    gap: 2px;
+  }
+
+  .toolbar-actions {
+    justify-content: flex-start;
+    gap: 2px;
+  }
+
+  .toolbar-actions > button,
+  .view-switcher button {
+    width: 34px;
+    min-height: 34px;
   }
 
   .gallery.masonry,
