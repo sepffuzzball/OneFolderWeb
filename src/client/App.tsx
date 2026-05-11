@@ -601,12 +601,6 @@ export function App() {
                 );
               })}
             </div>
-            <button title="Settings" className={settingsOpen ? 'active' : ''} onClick={() => {
-              leaveTagManager();
-              setSettingsOpen((open) => !open);
-            }}>
-              <Settings size={18} />
-            </button>
             <button title="Tag manager" className={tagManagerOpen ? 'active' : ''} onClick={() => setTagManagerOpen((open) => !open)}>
               <Tags size={18} />
             </button>
@@ -615,6 +609,12 @@ export function App() {
               void copyShareLink();
             }}>
               <Link size={18} />
+            </button>
+            <button title="Settings" className={settingsOpen ? 'active' : ''} onClick={() => {
+              leaveTagManager();
+              setSettingsOpen((open) => !open);
+            }}>
+              <Settings size={18} />
             </button>
           </div>
         </header>
