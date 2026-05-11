@@ -2,10 +2,13 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
+import type { MediaKind } from '../shared/types.js';
 import { paths } from './config.js';
 
 const imageExtensions = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'tif', 'tiff', 'bmp', 'svg']);
 const videoExtensions = new Set(['mp4', 'm4v', 'mov', 'webm', 'ogg', 'ogv', 'mkv']);
+const textExtensions = new Set(['doc', 'docx', 'rtf', 'odt', 'md']);
+const fileExtensions = new Set(['clip', 'html', 'wpe', 'wpb', 'tgs']);
 
 export type ThumbnailSize = 'grid' | 'preview';
 
@@ -22,8 +25,27 @@ export function isVideoExtension(extension: string): boolean {
   return videoExtensions.has(extension.toLowerCase());
 }
 
+export function isTextExtension(extension: string): boolean {
+  return textExtensions.has(extension.toLowerCase());
+}
+
+export function isFileExtension(extension: string): boolean {
+  return fileExtensions.has(extension.toLowerCase());
+}
+
 export function isMediaExtension(extension: string): boolean {
+  return isImageExtension(extension) || isVideoExtension(extension) || isTextExtension(extension) || isFileExtension(extension);
+}
+
+export function canCreateThumbnail(extension: string): boolean {
   return isImageExtension(extension) || isVideoExtension(extension);
+}
+
+export function mediaKindForExtension(extension: string): MediaKind {
+  if (isImageExtension(extension)) return 'image';
+  if (isVideoExtension(extension)) return 'video';
+  if (isTextExtension(extension)) return 'text';
+  return 'file';
 }
 
 export function thumbnailPathFor(id: string, size: ThumbnailSize = 'grid'): string {
@@ -31,6 +53,8 @@ export function thumbnailPathFor(id: string, size: ThumbnailSize = 'grid'): stri
 }
 
 export async function ensureThumbnail(id: string, filePath: string, extension: string): Promise<boolean> {
+  if (!canCreateThumbnail(extension)) return false;
+
   try {
     const source = await fs.promises.stat(filePath);
     await fs.promises.mkdir(paths.thumbnailDir, { recursive: true });

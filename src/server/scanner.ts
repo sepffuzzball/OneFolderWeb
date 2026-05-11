@@ -6,7 +6,7 @@ import type { FolderNode, IndexStatus, LibrarySettings, MediaItem, MediaQuery, T
 import { paths, runtimeConfig } from './config.js';
 import { readMetadata, writeMetadata } from './metadata.js';
 import { loadIndex, loadSettings, saveIndex } from './storage.js';
-import { ensureThumbnail, isImageExtension, isMediaExtension, thumbnailPathFor, type ThumbnailSize } from './thumbnails.js';
+import { canCreateThumbnail, ensureThumbnail, isMediaExtension, mediaKindForExtension, thumbnailPathFor, type ThumbnailSize } from './thumbnails.js';
 
 let cachedFiles: MediaItem[] = [];
 let cachedTagCatalog: string[] = [];
@@ -132,17 +132,18 @@ async function buildMediaItem(
     const id = mediaId(library.id, relativePath);
     const previous = previousByKey.get(`${library.id}:${relativePath}`);
     const modifiedAt = stat.mtime.toISOString();
+    const thumbnailAvailable = canCreateThumbnail(extension) && fs.existsSync(thumbnailPathFor(id, 'grid'));
     if (
       previous &&
       previous.size === stat.size &&
       previous.modifiedAt === modifiedAt &&
-      fs.existsSync(thumbnailPathFor(id, 'grid'))
+      (!canCreateThumbnail(extension) || thumbnailAvailable)
     ) {
       return {
         ...previous,
         libraryName: library.name,
-        thumbnailUrl: `/thumb/${id}?size=grid`,
-        previewThumbnailUrl: `/thumb/${id}?size=preview`,
+        thumbnailUrl: thumbnailAvailable ? `/thumb/${id}?size=grid` : `/file/${id}`,
+        previewThumbnailUrl: thumbnailAvailable ? `/thumb/${id}?size=preview` : `/file/${id}`,
         fileUrl: `/file/${id}`,
       };
     }
@@ -165,7 +166,7 @@ async function buildMediaItem(
       folder: folder === '.' ? '' : folder,
       name: path.basename(absolutePath),
       extension,
-      kind: isImageExtension(extension) ? 'image' : 'video',
+      kind: mediaKindForExtension(extension),
       mimeType: mime.lookup(extension) || 'application/octet-stream',
       size: stat.size,
       width: metadata.width,

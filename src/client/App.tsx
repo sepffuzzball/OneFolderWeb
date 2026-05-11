@@ -4,6 +4,8 @@ import {
   Clipboard,
   Copy,
   Download,
+  File,
+  FileText,
   FolderPlus,
   Grid2X2,
   Image as ImageIcon,
@@ -1190,8 +1192,8 @@ function MediaTile({ item, selected, showMeta = true, onSelect, onOpen, onDownlo
   const tileStyle = { '--media-aspect': mediaAspectRatio(item) } as CSSProperties;
   return (
     <article className={`tile ${selected ? 'selected' : ''}`} style={tileStyle} tabIndex={0} draggable onDragStart={(event) => onDragStart(item, event)} onClick={(event) => onSelect(item, event)} onDoubleClick={() => onOpen(item)}>
-      <img src={item.thumbnailUrl} alt={item.name} loading="lazy" />
-      {item.kind === 'video' && <span className="kind">Video</span>}
+      <MediaThumb item={item} />
+      {item.kind !== 'image' && <span className="kind">{mediaKindLabel(item)}</span>}
       <button className="tile-download" title="Download" onClick={(event) => {
         event.stopPropagation();
         onDownload(item);
@@ -1216,7 +1218,7 @@ function ListGallery({ items, selectedIds, hasMore, isPrefetching, onSelect, onO
     }}>
       {items.map((item) => (
         <article key={item.id} tabIndex={0} draggable className={`list-row ${selectedIds.includes(item.id) ? 'selected' : ''}`} onDragStart={(event) => onDragStart(item, event)} onClick={(event) => onSelect(item, event)} onDoubleClick={() => onOpen(item)}>
-          <img src={item.thumbnailUrl} alt="" />
+          <MediaThumb item={item} compact />
           <span>{item.name}</span>
           <small>{item.folder || item.libraryName}</small>
           <small title={item.tags.join(', ')}>{displayTags(item.tags)}</small>
@@ -1229,6 +1231,19 @@ function ListGallery({ items, selectedIds, hasMore, isPrefetching, onSelect, onO
           </button>
         </article>
       ))}
+    </div>
+  );
+}
+
+function MediaThumb({ item, compact = false }: { item: MediaItem; compact?: boolean }) {
+  if (item.kind === 'image' || item.kind === 'video') {
+    return <img src={item.thumbnailUrl} alt={compact ? '' : item.name} loading="lazy" />;
+  }
+  const Icon = item.kind === 'text' ? FileText : File;
+  return (
+    <div className={`file-thumb ${compact ? 'compact' : ''}`} aria-label={item.name}>
+      <Icon size={compact ? 20 : 42} />
+      <strong>{item.extension.toUpperCase()}</strong>
     </div>
   );
 }
@@ -1307,6 +1322,7 @@ function DetailView(props: {
   const [previewSize, setPreviewSize] = useState<Size | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const detailImageStyle = naturalSize && previewSize ? detailImageBox(naturalSize, previewSize, fitMode) : undefined;
+  const hasInlinePreview = props.item.kind === 'image' || props.item.kind === 'video';
 
   useEffect(() => {
     setFullLoaded(false);
@@ -1332,10 +1348,10 @@ function DetailView(props: {
       <div className="detail-surface" onClick={(event) => event.stopPropagation()}>
         <button className="close" onClick={props.onClose}>x</button>
         <div ref={previewRef} className={`preview fit-${fitMode} ${fullLoaded ? 'loaded' : 'loading'}`}>
-          {!fullLoaded && props.item.kind === 'image' && (
+          {hasInlinePreview && !fullLoaded && props.item.kind === 'image' && (
             <img className="preview-thumb" src={props.item.previewThumbnailUrl} alt="" aria-hidden="true" />
           )}
-          {!fullLoaded && (
+          {hasInlinePreview && !fullLoaded && (
             <div className="full-load-indicator">
               <span>Loading full size</span>
               <div><i /></div>
@@ -1343,7 +1359,7 @@ function DetailView(props: {
           )}
           {props.item.kind === 'video' ? (
             <video src={props.item.fileUrl} controls autoPlay onLoadedData={() => setFullLoaded(true)} />
-          ) : (
+          ) : props.item.kind === 'image' ? (
             <img
               className="preview-full"
               src={props.item.fileUrl}
@@ -1356,6 +1372,8 @@ function DetailView(props: {
                 setFullLoaded(true);
               }}
             />
+          ) : (
+            <FilePreview item={props.item} />
           )}
         </div>
         <aside>
@@ -1403,6 +1421,17 @@ function DetailView(props: {
       </div>
       {exportOpen && props.item.kind === 'image' && <ExportPanel item={props.item} onClose={() => setExportOpen(false)} />}
     </section>
+  );
+}
+
+function FilePreview({ item }: { item: MediaItem }) {
+  const Icon = item.kind === 'text' ? FileText : File;
+  return (
+    <div className="preview-file">
+      <Icon size={56} />
+      <strong>{item.extension.toUpperCase()}</strong>
+      <span>{item.kind === 'text' ? 'Text document' : 'File'}</span>
+    </div>
   );
 }
 
@@ -1576,6 +1605,12 @@ function imageItemSize(item: MediaItem): Size | null {
 
 function mediaAspectRatio(item: MediaItem): string {
   return item.width && item.height ? `${item.width} / ${item.height}` : '1 / 1';
+}
+
+function mediaKindLabel(item: MediaItem): string {
+  if (item.kind === 'video') return 'Video';
+  if (item.kind === 'text') return 'Text';
+  return 'File';
 }
 
 function detailImageBox(image: Size, preview: Size, mode: DetailFitMode): { width: string; height: string } {

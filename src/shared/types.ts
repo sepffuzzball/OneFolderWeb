@@ -1,4 +1,4 @@
-export type MediaKind = 'image' | 'video';
+export type MediaKind = 'image' | 'video' | 'text' | 'file';
 
 export type ViewMode = 'list' | 'grid' | 'masonry-vertical' | 'masonry-horizontal' | 'calendar';
 

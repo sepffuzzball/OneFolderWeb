@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mediaId, normalizeSlashes, normalizeTag, resolveKnownTagPath, tagExpressionMatches } from './scanner.js';
+import { isMediaExtension, mediaKindForExtension } from './thumbnails.js';
 
 describe('scanner path helpers', () => {
   it('normalizes Windows separators for stable web paths', () => {
@@ -30,5 +31,17 @@ describe('scanner path helpers', () => {
     expect(tagExpressionMatches('(dog OR cat) AND food', ['Animals/Cat/CatName'])).toBe(false);
     expect(tagExpressionMatches('dog OR cat AND food', ['Animals/Dog/DogName'])).toBe(true);
     expect(tagExpressionMatches('dog, food', ['Animals/Dog/DogName', 'Food'])).toBe(true);
+  });
+
+  it('classifies supported document and companion file extensions', () => {
+    for (const extension of ['doc', 'docx', 'rtf', 'odt', 'md']) {
+      expect(isMediaExtension(extension)).toBe(true);
+      expect(mediaKindForExtension(extension)).toBe('text');
+    }
+
+    for (const extension of ['clip', 'html', 'wpe', 'wpb', 'tgs']) {
+      expect(isMediaExtension(extension)).toBe(true);
+      expect(mediaKindForExtension(extension)).toBe('file');
+    }
   });
 });
