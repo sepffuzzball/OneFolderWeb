@@ -75,8 +75,11 @@ textarea {
 .sidebar {
   display: flex;
   min-width: 0;
+  height: 100vh;
+  min-height: 0;
   flex-direction: column;
   gap: 14px;
+  overflow: hidden;
   border-right: 1px solid #292d34;
   background: #15171b;
   padding: 18px 14px;
@@ -84,6 +87,7 @@ textarea {
 
 .brand {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 10px;
   min-height: 44px;
@@ -114,6 +118,7 @@ textarea {
 
 .readonly {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
   min-height: 34px;
@@ -126,6 +131,7 @@ textarea {
 .sidebar-tabs,
 .tag-sort {
   display: grid;
+  flex: 0 0 auto;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
   border: 1px solid #343840;
@@ -165,6 +171,7 @@ textarea {
   flex-direction: column;
   gap: 2px;
   overflow: auto;
+  padding-right: 2px;
 }
 
 .sidebar-tag-list button {
@@ -207,6 +214,7 @@ textarea {
   flex-direction: column;
   gap: 2px;
   overflow: auto;
+  padding-right: 2px;
 }
 
 .folder-tree button {
@@ -233,6 +241,7 @@ textarea {
 
 .sidebar-actions {
   display: grid;
+  flex: 0 0 auto;
   gap: 8px;
 }
 
@@ -1156,7 +1165,9 @@ button.crop-box:focus {
   }
 
   .sidebar {
+    height: 42vh;
     max-height: 42vh;
+    min-height: 0;
     border-right: 0;
     border-bottom: 1px solid #292d34;
   }
