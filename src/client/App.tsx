@@ -21,7 +21,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { AppSettings, FolderNode, IndexStatus, MediaItem, PagedMediaResponse, RuntimeConfig, TagSummary, ViewMode } from '../shared/types.js';
 
 type Toast = { id: number; message: string };
@@ -1162,8 +1162,9 @@ function Gallery({
 }
 
 function MediaTile({ item, selected, showMeta = true, onSelect, onOpen, onDownload, onDragStart }: { item: MediaItem; selected: boolean; showMeta?: boolean; onSelect: (item: MediaItem, event?: React.MouseEvent) => void; onOpen: (item: MediaItem) => void; onDownload: (item: MediaItem) => void; onDragStart: (item: MediaItem, event: React.DragEvent) => void }) {
+  const tileStyle = { '--media-aspect': mediaAspectRatio(item) } as CSSProperties;
   return (
-    <article className={`tile ${selected ? 'selected' : ''}`} tabIndex={0} draggable onDragStart={(event) => onDragStart(item, event)} onClick={(event) => onSelect(item, event)} onDoubleClick={() => onOpen(item)}>
+    <article className={`tile ${selected ? 'selected' : ''}`} style={tileStyle} tabIndex={0} draggable onDragStart={(event) => onDragStart(item, event)} onClick={(event) => onSelect(item, event)} onDoubleClick={() => onOpen(item)}>
       <img src={item.thumbnailUrl} alt={item.name} loading="lazy" />
       {item.kind === 'video' && <span className="kind">Video</span>}
       <button className="tile-download" title="Download" onClick={(event) => {
@@ -1546,6 +1547,10 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 function imageItemSize(item: MediaItem): Size | null {
   return item.width && item.height ? { width: item.width, height: item.height } : null;
+}
+
+function mediaAspectRatio(item: MediaItem): string {
+  return item.width && item.height ? `${item.width} / ${item.height}` : '1 / 1';
 }
 
 function detailImageBox(image: Size, preview: Size, mode: DetailFitMode): { width: string; height: string } {

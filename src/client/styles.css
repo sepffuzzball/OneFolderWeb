@@ -402,6 +402,9 @@ textarea {
 }
 
 .gallery.masonry {
+  display: block;
+  overflow-x: hidden;
+  overflow-y: auto;
   column-count: 5;
   column-gap: 12px;
 }
@@ -409,9 +412,12 @@ textarea {
 .gallery.masonry.horizontal {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(210px, 25vw);
+  grid-auto-columns: auto;
   grid-template-rows: repeat(2, minmax(190px, 1fr));
   gap: 12px;
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .tile {
@@ -440,6 +446,8 @@ textarea {
 }
 
 .masonry:not(.horizontal) .tile {
+  display: inline-block;
+  width: 100%;
   height: auto;
   margin-bottom: 12px;
 }
@@ -458,8 +466,11 @@ textarea {
 }
 
 .masonry:not(.horizontal) .tile img {
+  display: block;
+  width: 100%;
   height: auto;
   aspect-ratio: auto;
+  object-fit: contain;
 }
 
 .tile footer {
@@ -471,6 +482,20 @@ textarea {
 
 .gallery.pure .tile {
   grid-template-rows: 1fr;
+}
+
+.gallery.masonry.horizontal .tile {
+  width: auto;
+  height: 100%;
+  aspect-ratio: var(--media-aspect, 1 / 1);
+}
+
+.gallery.masonry.horizontal .tile img {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  object-fit: contain;
 }
 
 .gallery.pure .tile footer {
@@ -1157,9 +1182,9 @@ button.crop-box:focus {
   }
 
   .gallery.masonry.horizontal {
-    grid-auto-flow: row;
-    grid-template-rows: none;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    grid-auto-flow: column;
+    grid-template-rows: repeat(2, minmax(140px, 1fr));
+    grid-template-columns: none;
   }
 
   .list-row {
