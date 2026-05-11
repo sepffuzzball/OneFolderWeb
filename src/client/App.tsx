@@ -1139,8 +1139,32 @@ function Gallery({
   }
   if (view === 'list') return <ListGallery items={items} selectedIds={selectedIds} hasMore={hasMore} isPrefetching={isPrefetching} onSelect={onSelect} onOpen={onOpen} onClear={onClear} onPrefetch={onPrefetch} onDownload={onDownload} onDragStart={onDragStart} />;
   if (view === 'calendar') return <CalendarGallery items={items} selectedIds={selectedIds} hasMore={hasMore} isPrefetching={isPrefetching} onSelect={onSelect} onOpen={onOpen} onClear={onClear} onPrefetch={onPrefetch} onDownload={onDownload} onDragStart={onDragStart} />;
-  const isMasonry = view === 'masonry-horizontal' || view === 'masonry-vertical';
-  const className = view === 'masonry-horizontal' ? 'gallery masonry horizontal pure' : view === 'masonry-vertical' ? 'gallery masonry pure' : 'gallery grid';
+  if (view === 'masonry-vertical') {
+    return (
+      <div ref={scrollRef} className="gallery masonry-scroll pure" onScroll={maybePrefetch} onClick={(event) => {
+        if (event.target === event.currentTarget) onClear();
+      }}>
+        <div className="masonry-columns" onClick={(event) => {
+          if (event.target === event.currentTarget) onClear();
+        }}>
+          {items.map((item) => (
+            <MediaTile
+              key={item.id}
+              item={item}
+              selected={selectedIds.includes(item.id)}
+              showMeta={false}
+              onSelect={onSelect}
+              onOpen={onOpen}
+              onDownload={onDownload}
+              onDragStart={onDragStart}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+  const isMasonry = view === 'masonry-horizontal';
+  const className = isMasonry ? 'gallery masonry horizontal pure' : 'gallery grid';
   return (
     <div ref={scrollRef} className={className} onScroll={maybePrefetch} onClick={(event) => {
       if (event.target === event.currentTarget) onClear();
