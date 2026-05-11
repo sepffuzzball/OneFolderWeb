@@ -897,6 +897,81 @@ textarea {
   color: #a8adb6;
 }
 
+.markdown-preview {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: #101318;
+  padding: 34px clamp(18px, 5vw, 64px);
+  color: #e6e9ee;
+  line-height: 1.6;
+}
+
+.markdown-preview h1,
+.markdown-preview h2,
+.markdown-preview h3,
+.markdown-preview h4,
+.markdown-preview p,
+.markdown-preview ul,
+.markdown-preview ol,
+.markdown-preview blockquote,
+.markdown-preview pre {
+  max-width: 760px;
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.markdown-preview h1,
+.markdown-preview h2,
+.markdown-preview h3,
+.markdown-preview h4 {
+  margin-top: 0;
+  margin-bottom: 12px;
+  line-height: 1.2;
+}
+
+.markdown-preview p,
+.markdown-preview ul,
+.markdown-preview ol,
+.markdown-preview blockquote,
+.markdown-preview pre {
+  margin-top: 0;
+  margin-bottom: 16px;
+}
+
+.markdown-preview code {
+  border-radius: 4px;
+  background: #1d232c;
+  padding: 2px 5px;
+  color: #dbe8f8;
+}
+
+.markdown-preview pre {
+  overflow: auto;
+  border: 1px solid #343840;
+  border-radius: 8px;
+  background: #0b0d10;
+  padding: 14px;
+}
+
+.markdown-preview pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-preview blockquote {
+  border-left: 3px solid #5f7da7;
+  padding-left: 14px;
+  color: #c8d0dc;
+}
+
+.markdown-preview hr {
+  max-width: 760px;
+  border: 0;
+  border-top: 1px solid #343840;
+  margin: 22px auto;
+}
+
 .preview.loading .preview-full,
 .preview.loading video {
   opacity: 0;

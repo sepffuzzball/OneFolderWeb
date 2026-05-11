@@ -23,7 +23,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { AppSettings, FolderNode, IndexStatus, MediaItem, PagedMediaResponse, RuntimeConfig, TagSummary, ViewMode } from '../shared/types.js';
 
 type Toast = { id: number; message: string };
@@ -1414,7 +1414,7 @@ function DetailView(props: {
             ))}
           </div>
           <div className="detail-actions">
-            <button onClick={() => void props.onSave()} disabled={props.readOnly}><Check size={16} />Save XMP</button>
+            <button onClick={() => void props.onSave()} disabled={props.readOnly}><Check size={16} />Save {isMarkdownItem(props.item) ? 'metadata' : 'XMP'}</button>
             <button onClick={() => void props.onCopy()}><Copy size={16} />Copy</button>
             <button onClick={props.onCopyLink}><Link size={16} />Link</button>
             <button onClick={props.onDownload}><Download size={16} />Download</button>
@@ -1429,6 +1429,43 @@ function DetailView(props: {
 }
 
 function FilePreview({ item }: { item: MediaItem }) {
+  const isMarkdown = isMarkdownItem(item);
+  const [markdownSource, setMarkdownSource] = useState('');
+  const [markdownError, setMarkdownError] = useState('');
+  const [isLoadingMarkdown, setLoadingMarkdown] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setMarkdownSource('');
+    setMarkdownError('');
+    if (!isMarkdown) {
+      setLoadingMarkdown(false);
+      return;
+    }
+    setLoadingMarkdown(true);
+    fetch(item.fileUrl)
+      .then((response) => {
+        if (!response.ok) throw new Error('Could not load markdown');
+        return response.text();
+      })
+      .then((text) => {
+        if (active) setMarkdownSource(stripMarkdownFrontmatter(text));
+      })
+      .catch(() => {
+        if (active) setMarkdownError('Could not load markdown preview');
+      })
+      .finally(() => {
+        if (active) setLoadingMarkdown(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isMarkdown, item.fileUrl]);
+
+  if (isMarkdown) {
+    return <MarkdownPreview source={markdownSource} isLoading={isLoadingMarkdown} error={markdownError} />;
+  }
+
   const Icon = item.kind === 'text' ? FileText : File;
   return (
     <div className="preview-file">
@@ -1437,6 +1474,114 @@ function FilePreview({ item }: { item: MediaItem }) {
       <span>{item.kind === 'text' ? 'Text document' : 'File'}</span>
     </div>
   );
+}
+
+function MarkdownPreview({ source, isLoading, error }: { source: string; isLoading: boolean; error: string }) {
+  if (isLoading) return <div className="markdown-preview"><p>Loading markdown...</p></div>;
+  if (error) return <div className="markdown-preview"><p>{error}</p></div>;
+  const blocks = renderMarkdownBlocks(source);
+  return <div className="markdown-preview">{blocks.length > 0 ? blocks : <p>No markdown content</p>}</div>;
+}
+
+function renderMarkdownBlocks(source: string): ReactNode[] {
+  const blocks: ReactNode[] = [];
+  const lines = source.replace(/\r\n/g, '\n').split('\n');
+  let index = 0;
+  let paragraph: string[] = [];
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return;
+    blocks.push(<p key={`p-${blocks.length}`}>{renderInlineMarkdown(paragraph.join(' '), `p-${blocks.length}`)}</p>);
+    paragraph = [];
+  };
+
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim()) {
+      flushParagraph();
+      index += 1;
+      continue;
+    }
+
+    const fence = line.match(/^```\s*(.*)$/);
+    if (fence) {
+      flushParagraph();
+      const code: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^```\s*$/.test(lines[index])) {
+        code.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push(<pre key={`code-${blocks.length}`}><code>{code.join('\n')}</code></pre>);
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      const level = Math.min(heading[1].length, 6);
+      const content = renderInlineMarkdown(heading[2], `h-${blocks.length}`);
+      if (level === 1) blocks.push(<h1 key={`h-${blocks.length}`}>{content}</h1>);
+      else if (level === 2) blocks.push(<h2 key={`h-${blocks.length}`}>{content}</h2>);
+      else if (level === 3) blocks.push(<h3 key={`h-${blocks.length}`}>{content}</h3>);
+      else blocks.push(<h4 key={`h-${blocks.length}`}>{content}</h4>);
+      index += 1;
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(line)) {
+      flushParagraph();
+      const items: string[] = [];
+      while (index < lines.length && /^[-*]\s+/.test(lines[index])) {
+        items.push(lines[index].replace(/^[-*]\s+/, ''));
+        index += 1;
+      }
+      blocks.push(<ul key={`ul-${blocks.length}`}>{items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item, `ul-${blocks.length}-${itemIndex}`)}</li>)}</ul>);
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(line)) {
+      flushParagraph();
+      const items: string[] = [];
+      while (index < lines.length && /^\d+\.\s+/.test(lines[index])) {
+        items.push(lines[index].replace(/^\d+\.\s+/, ''));
+        index += 1;
+      }
+      blocks.push(<ol key={`ol-${blocks.length}`}>{items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item, `ol-${blocks.length}-${itemIndex}`)}</li>)}</ol>);
+      continue;
+    }
+
+    if (/^>\s?/.test(line)) {
+      flushParagraph();
+      const quote: string[] = [];
+      while (index < lines.length && /^>\s?/.test(lines[index])) {
+        quote.push(lines[index].replace(/^>\s?/, ''));
+        index += 1;
+      }
+      blocks.push(<blockquote key={`quote-${blocks.length}`}>{renderInlineMarkdown(quote.join(' '), `quote-${blocks.length}`)}</blockquote>);
+      continue;
+    }
+
+    if (/^---+$/.test(line.trim())) {
+      flushParagraph();
+      blocks.push(<hr key={`hr-${blocks.length}`} />);
+      index += 1;
+      continue;
+    }
+
+    paragraph.push(line.trim());
+    index += 1;
+  }
+  flushParagraph();
+  return blocks;
+}
+
+function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
+  return text.split(/(`[^`]+`)/g).filter(Boolean).map((part, index) => {
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={`${keyPrefix}-${index}`}>{part.slice(1, -1)}</code>;
+    return part;
+  });
 }
 
 function ExportPanel({ item, onClose }: { item: MediaItem; onClose: () => void }) {
@@ -1615,6 +1760,14 @@ function mediaKindLabel(item: MediaItem): string {
   if (item.kind === 'video') return 'Video';
   if (item.kind === 'text') return 'Text';
   return 'File';
+}
+
+function isMarkdownItem(item: MediaItem): boolean {
+  return item.extension.toLowerCase() === 'md';
+}
+
+function stripMarkdownFrontmatter(source: string): string {
+  return source.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
 }
 
 function detailImageBox(image: Size, preview: Size, mode: DetailFitMode): { width: string; height: string } {
