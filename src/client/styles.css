@@ -915,7 +915,8 @@ textarea {
 .markdown-preview ul,
 .markdown-preview ol,
 .markdown-preview blockquote,
-.markdown-preview pre {
+.markdown-preview pre,
+.markdown-preview table {
   max-width: 760px;
   margin-right: auto;
   margin-left: auto;
@@ -934,9 +935,14 @@ textarea {
 .markdown-preview ul,
 .markdown-preview ol,
 .markdown-preview blockquote,
-.markdown-preview pre {
+.markdown-preview pre,
+.markdown-preview table {
   margin-top: 0;
   margin-bottom: 16px;
+}
+
+.markdown-preview a {
+  color: #9fc4f1;
 }
 
 .markdown-preview code {
@@ -963,6 +969,40 @@ textarea {
   border-left: 3px solid #5f7da7;
   padding-left: 14px;
   color: #c8d0dc;
+}
+
+.markdown-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  border: 1px solid #343840;
+  border-radius: 8px;
+}
+
+.markdown-preview th,
+.markdown-preview td {
+  border: 1px solid #343840;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-preview th {
+  background: #1d232c;
+}
+
+.markdown-preview img {
+  display: block;
+  max-width: min(760px, 100%);
+  height: auto;
+  margin: 0 auto 16px;
+  border-radius: 8px;
+}
+
+.markdown-preview input[type="checkbox"] {
+  width: auto;
+  min-height: auto;
+  margin-right: 7px;
 }
 
 .markdown-preview hr {
