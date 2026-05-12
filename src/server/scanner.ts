@@ -528,7 +528,7 @@ export async function buildFolderTree(files = currentFiles()): Promise<FolderNod
     nodes.forEach((node) => sortNodes(node.children));
   };
   const nodes = Array.from(libraries.values());
-  sortNodes(nodes);
+  nodes.forEach((node) => sortNodes(node.children));
   return runtimeConfig.hideEmptyFolders ? nodes.filter((node) => node.itemCount > 0) : nodes;
 }
 

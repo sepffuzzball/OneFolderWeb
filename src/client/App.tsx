@@ -1,4 +1,6 @@
 import {
+  ArrowDown,
+  ArrowUp,
   CalendarDays,
   Check,
   ChevronDown,
@@ -1814,6 +1816,14 @@ function SettingsPanel({ settings, config, onSaved }: { settings: AppSettings; c
       </div>
       {draft.libraries.map((library, index) => (
         <div className="library-row" key={library.id}>
+          <div className="library-order-controls">
+            <button title="Move library up" onClick={() => setDraft(moveLibrary(draft, index, -1))} disabled={config.readOnly || index === 0}>
+              <ArrowUp size={16} />
+            </button>
+            <button title="Move library down" onClick={() => setDraft(moveLibrary(draft, index, 1))} disabled={config.readOnly || index === draft.libraries.length - 1}>
+              <ArrowDown size={16} />
+            </button>
+          </div>
           <input value={library.name} onChange={(event) => setDraft(updateLibrary(draft, index, { name: event.target.value }))} disabled={config.readOnly} />
           <input value={library.path} onChange={(event) => setDraft(updateLibrary(draft, index, { path: event.target.value }))} disabled={config.readOnly} />
           <label><input type="checkbox" checked={library.enabled} onChange={(event) => setDraft(updateLibrary(draft, index, { enabled: event.target.checked }))} disabled={config.readOnly} />Enabled</label>
@@ -1827,6 +1837,14 @@ function SettingsPanel({ settings, config, onSaved }: { settings: AppSettings; c
 
 function updateLibrary(settings: AppSettings, index: number, patch: Partial<AppSettings['libraries'][number]>): AppSettings {
   return { ...settings, libraries: settings.libraries.map((library, current) => (current === index ? { ...library, ...patch } : library)) };
+}
+
+function moveLibrary(settings: AppSettings, index: number, offset: -1 | 1): AppSettings {
+  const target = index + offset;
+  if (target < 0 || target >= settings.libraries.length) return settings;
+  const libraries = [...settings.libraries];
+  [libraries[index], libraries[target]] = [libraries[target], libraries[index]];
+  return { ...settings, libraries };
 }
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {

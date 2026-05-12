@@ -849,9 +849,20 @@ textarea {
 
 .library-row {
   display: grid;
-  grid-template-columns: minmax(120px, 0.4fr) minmax(180px, 1fr) auto;
+  grid-template-columns: auto minmax(120px, 0.4fr) minmax(180px, 1fr) auto;
   gap: 8px;
   align-items: center;
+}
+
+.library-order-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.library-order-controls button {
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
 }
 
 .library-row label {
