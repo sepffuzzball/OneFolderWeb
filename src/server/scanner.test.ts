@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mediaId, normalizeSlashes, normalizeTag, resolveKnownTagPath, tagExpressionMatches } from './scanner.js';
+import { mediaId, normalizeSlashes, normalizeTag, resolveKnownTagPath, resolveTagAliasFromMap, tagExpressionMatches } from './scanner.js';
 import { isMediaExtension, mediaKindForExtension } from './thumbnails.js';
 
 describe('scanner path helpers', () => {
@@ -24,6 +24,17 @@ describe('scanner path helpers', () => {
     expect(resolveKnownTagPath('DogName', knownTags)).toBe('animals/dog/dogname');
     expect(resolveKnownTagPath('Animals/Dog', knownTags)).toBe('animals/dog');
     expect(resolveKnownTagPath('Dog', knownTags)).toBe('dog');
+  });
+
+  it('resolves tag aliases to their canonical tag', () => {
+    const aliases = {
+      'animals/dog': ['doggo', 'perro', 'inu'],
+      cat: ['gato'],
+    };
+    expect(resolveTagAliasFromMap('doggo', aliases)).toBe('animals/dog');
+    expect(resolveTagAliasFromMap('Perro', aliases)).toBe('animals/dog');
+    expect(resolveTagAliasFromMap('gato', aliases)).toBe('cat');
+    expect(resolveTagAliasFromMap('bird', aliases)).toBe('bird');
   });
 
   it('matches tag filter expressions with AND, OR, and parentheses', () => {

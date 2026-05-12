@@ -38,7 +38,7 @@ function defaultSettings(): AppSettings {
     path: paths.dataRoot,
     enabled: true,
   };
-  return { libraries: [library], tagCatalog: [] };
+  return { libraries: [library], tagCatalog: [], tagAliases: {} };
 }
 
 export async function loadSettings(): Promise<AppSettings> {
@@ -56,6 +56,7 @@ export async function loadSettings(): Promise<AppSettings> {
     tagCatalog: Array.from(new Set((settings.tagCatalog ?? []).map(String).filter(Boolean))).sort((a, b) =>
       a.localeCompare(b),
     ),
+    tagAliases: normalizeTagAliases(settings.tagAliases),
   };
 }
 
@@ -70,10 +71,25 @@ export async function saveSettings(settings: AppSettings): Promise<AppSettings> 
     tagCatalog: Array.from(new Set((settings.tagCatalog ?? []).map(String).filter(Boolean))).sort((a, b) =>
       a.localeCompare(b),
     ),
+    tagAliases: normalizeTagAliases(settings.tagAliases),
   };
   await writeJson(settingsPath, normalized);
   await backupJson('settings', normalized);
   return normalized;
+}
+
+function normalizeTagAliases(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const aliases: Record<string, string[]> = {};
+  for (const [tag, rawAliases] of Object.entries(value)) {
+    if (!Array.isArray(rawAliases)) continue;
+    const cleanTag = String(tag).trim();
+    const cleanAliases = Array.from(new Set(rawAliases.map(String).map((alias) => alias.trim()).filter(Boolean))).sort((a, b) =>
+      a.localeCompare(b),
+    );
+    if (cleanTag && cleanAliases.length > 0) aliases[cleanTag] = cleanAliases;
+  }
+  return aliases;
 }
 
 export async function loadIndex(): Promise<MediaIndex> {

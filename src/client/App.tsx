@@ -1,6 +1,8 @@
 import {
   CalendarDays,
   Check,
+  ChevronDown,
+  ChevronRight,
   Clipboard,
   Copy,
   Download,
@@ -82,7 +84,7 @@ export function App() {
   const selectedItems = useMemo(() => items.filter((item) => selectedIds.includes(item.id)), [items, selectedIds]);
   const debouncedQuery = useDebouncedValue(query, 180);
   const debouncedTagFilter = useDebouncedValue(tagFilter, 180);
-  const allTags = useMemo(
+  const managedTags = useMemo(
     () =>
       Array.from(
         new Set(
@@ -92,6 +94,13 @@ export function App() {
         ),
       ).sort((a, b) => a.localeCompare(b)),
     [items, knownTags, settings?.tagCatalog],
+  );
+  const allTags = useMemo(
+    () =>
+      Array.from(new Set([...managedTags, ...Object.values(settings?.tagAliases ?? {}).flat().map(normalizeTag).filter(Boolean)])).sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [managedTags, settings?.tagAliases],
   );
 
   const notify = useCallback((message: string) => {
@@ -448,6 +457,16 @@ export function App() {
     await load();
   };
 
+  const saveTagAliases = async (tag: string, aliases: string[]) => {
+    const tagAliases = await api<Record<string, string[]>>('/api/tags/aliases', {
+      method: 'PUT',
+      body: JSON.stringify({ tag, aliases }),
+    });
+    setSettings((current) => (current ? { ...current, tagAliases } : current));
+    notify('Tag aliases saved');
+    await load();
+  };
+
   const leaveTagManager = () => {
     setTagManagerOpen(false);
   };
@@ -640,13 +659,15 @@ export function App() {
 
         {tagManagerOpen && settings && config ? (
           <TagManager
-            tags={allTags}
+            tags={managedTags}
+            aliases={settings.tagAliases}
             selectedCount={selectedIds.length}
             readOnly={config.readOnly}
             onFilter={(tag) => setTagFilter(tag)}
             onApply={(tag) => applyTagToSelection(tag, 'add')}
             onRemoveFromSelection={(tag) => applyTagToSelection(tag, 'remove')}
             onCatalogSave={saveTagCatalog}
+            onAliasesSave={saveTagAliases}
             onRename={renameTag}
             onMove={moveTag}
             onDelete={deleteTag}
@@ -730,11 +751,31 @@ function FolderTree({
   onMove: (ids: string[], target: { libraryId: string; folder?: string }) => Promise<void>;
   onMoveFolder: (folder: DraggedFolder, target: { libraryId: string; folder?: string }) => Promise<void>;
 }) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const toggleCollapsed = (id: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   return (
     <nav className="folder-tree">
       <button className={!selected.libraryId && !selected.folder ? 'selected' : ''} onClick={() => onSelect({})}>All libraries</button>
       {nodes.map((node) => (
-        <FolderNodeView key={node.id} node={node} selected={selected} readOnly={readOnly} onSelect={onSelect} onMove={onMove} onMoveFolder={onMoveFolder} />
+        <FolderNodeView
+          key={node.id}
+          node={node}
+          collapsed={collapsed}
+          selected={selected}
+          readOnly={readOnly}
+          onSelect={onSelect}
+          onMove={onMove}
+          onMoveFolder={onMoveFolder}
+          onToggle={toggleCollapsed}
+        />
       ))}
     </nav>
   );
@@ -753,12 +794,27 @@ function TagSidebar({
   onSort: (sort: TagSortMode) => void;
   onSelect: (tag: string) => void;
 }) {
-  const sortedSummaries = useMemo(() => {
-    return [...summaries].sort((a, b) => {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const sortedTree = useMemo(() => {
+    const compare = (a: TagSummaryTreeNode, b: TagSummaryTreeNode) => {
       if (sort === 'count') return b.count - a.count || a.tag.localeCompare(b.tag);
       return a.tag.localeCompare(b.tag);
-    });
+    };
+    const sortNodes = (nodes: TagSummaryTreeNode[]) => {
+      nodes.sort(compare);
+      nodes.forEach((node) => sortNodes(node.children));
+      return nodes;
+    };
+    return sortNodes(buildTagSummaryTree(summaries));
   }, [sort, summaries]);
+  const toggleCollapsed = (tag: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      return next;
+    });
+  };
 
   return (
     <section className="tag-sidebar">
@@ -767,19 +823,18 @@ function TagSidebar({
         <button className={sort === 'count' ? 'active' : ''} onClick={() => onSort('count')}>Count</button>
       </div>
       <nav className="sidebar-tag-list" aria-label="Available tags">
-        {sortedSummaries.length === 0 ? (
+        {sortedTree.length === 0 ? (
           <span>No tags yet</span>
         ) : (
-          sortedSummaries.map((summary) => (
-            <button
-              key={summary.tag}
-              className={normalizeTag(activeTag).toLowerCase() === summary.tag.toLowerCase() ? 'selected' : ''}
-              title={summary.tag}
-              onClick={() => onSelect(summary.tag)}
-            >
-              <span>{displayTag(summary.tag)}</span>
-              <small>({summary.count.toLocaleString()})</small>
-            </button>
+          sortedTree.map((node) => (
+            <TagSummaryNodeView
+              key={node.tag}
+              node={node}
+              activeTag={activeTag}
+              collapsed={collapsed}
+              onSelect={onSelect}
+              onToggle={toggleCollapsed}
+            />
           ))
         )}
       </nav>
@@ -787,70 +842,144 @@ function TagSidebar({
   );
 }
 
+type TagSummaryTreeNode = TagSummary & {
+  name: string;
+  children: TagSummaryTreeNode[];
+};
+
+function TagSummaryNodeView({
+  node,
+  activeTag,
+  collapsed,
+  onSelect,
+  onToggle,
+}: {
+  node: TagSummaryTreeNode;
+  activeTag: string;
+  collapsed: Set<string>;
+  onSelect: (tag: string) => void;
+  onToggle: (tag: string) => void;
+}) {
+  const isCollapsed = collapsed.has(node.tag);
+  const hasChildren = node.children.length > 0;
+  return (
+    <div className="sidebar-tag-node">
+      <div className="tree-row" style={{ paddingLeft: node.tag.split('/').length * 10 - 10 }}>
+        {hasChildren ? (
+          <button className="tree-toggle" title={isCollapsed ? 'Expand tag' : 'Collapse tag'} onClick={() => onToggle(node.tag)}>
+            {isCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+          </button>
+        ) : (
+          <span className="tree-toggle-spacer" />
+        )}
+        <button
+          className={`tree-item ${normalizeTag(activeTag).toLowerCase() === node.tag.toLowerCase() ? 'selected' : ''}`}
+          title={node.tag}
+          onClick={() => onSelect(node.tag)}
+        >
+          <span>{displayTag(node.name)}</span>
+          <small>({node.count.toLocaleString()})</small>
+        </button>
+      </div>
+      {hasChildren && !isCollapsed && (
+        <div className="sidebar-tag-children">
+          {node.children.map((child) => (
+            <TagSummaryNodeView key={child.tag} node={child} activeTag={activeTag} collapsed={collapsed} onSelect={onSelect} onToggle={onToggle} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FolderNodeView({
   node,
+  collapsed,
   selected,
   readOnly,
   onSelect,
   onMove,
   onMoveFolder,
+  onToggle,
 }: {
   node: FolderNode;
+  collapsed: Set<string>;
   selected: { libraryId?: string; folder?: string };
   readOnly: boolean;
   onSelect: (next: { libraryId?: string; folder?: string }) => void;
   onMove: (ids: string[], target: { libraryId: string; folder?: string }) => Promise<void>;
   onMoveFolder: (folder: DraggedFolder, target: { libraryId: string; folder?: string }) => Promise<void>;
+  onToggle: (id: string) => void;
 }) {
   const isSelected = selected.libraryId === node.libraryId && (selected.folder ?? '') === node.relativePath;
   const [isDropTarget, setDropTarget] = useState(false);
+  const hasChildren = node.children.length > 0;
+  const isCollapsed = collapsed.has(node.id);
   return (
     <div>
-      <button
-        className={`${isSelected ? 'selected' : ''} ${isDropTarget ? 'drop-target' : ''}`}
-        draggable={!readOnly && Boolean(node.relativePath)}
-        style={{ paddingLeft: 12 + node.depth * 14 }}
-        onDragStart={(event) => {
-          if (!node.relativePath) return;
-          event.stopPropagation();
-          event.dataTransfer.effectAllowed = 'move';
-          event.dataTransfer.setData('application/x-onefolder-folder', JSON.stringify({ libraryId: node.libraryId, path: node.relativePath } satisfies DraggedFolder));
-          event.dataTransfer.setData('text/plain', node.relativePath);
-        }}
-        onClick={() => onSelect({ libraryId: node.libraryId, folder: node.relativePath })}
-        onDragOver={(event) => {
-          if (readOnly || !canDropOnFolder(event.dataTransfer, node)) return;
-          event.preventDefault();
-          event.stopPropagation();
-          event.dataTransfer.dropEffect = 'move';
-          setDropTarget(true);
-        }}
-        onDragLeave={() => setDropTarget(false)}
-        onDrop={(event) => {
-          if (readOnly) return;
-          const rawFolder = event.dataTransfer.getData('application/x-onefolder-folder');
-          const rawIds = event.dataTransfer.getData('application/x-onefolder-media');
-          if (!rawIds && !rawFolder) return;
-          event.preventDefault();
-          event.stopPropagation();
-          setDropTarget(false);
-          if (rawFolder) {
-            const folder = parseDraggedFolder(rawFolder);
-            if (!folder) return;
-            if (canMoveFolderTo(folder, node)) void onMoveFolder(folder, { libraryId: node.libraryId, folder: node.relativePath });
-            return;
-          }
-          if (rawIds) {
-            const ids = JSON.parse(rawIds) as string[];
-            void onMove(ids, { libraryId: node.libraryId, folder: node.relativePath });
-          }
-        }}
-      >
-        <span>{node.name}</span>
-        <small>{node.itemCount}</small>
-      </button>
-      {node.children.map((child) => (
-        <FolderNodeView key={child.id} node={child} selected={selected} readOnly={readOnly} onSelect={onSelect} onMove={onMove} onMoveFolder={onMoveFolder} />
+      <div className="tree-row" style={{ paddingLeft: node.depth * 14 }}>
+        {hasChildren ? (
+          <button className="tree-toggle" title={isCollapsed ? 'Expand folder' : 'Collapse folder'} onClick={() => onToggle(node.id)}>
+            {isCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+          </button>
+        ) : (
+          <span className="tree-toggle-spacer" />
+        )}
+        <button
+          className={`tree-item ${isSelected ? 'selected' : ''} ${isDropTarget ? 'drop-target' : ''}`}
+          draggable={!readOnly && Boolean(node.relativePath)}
+          onDragStart={(event) => {
+            if (!node.relativePath) return;
+            event.stopPropagation();
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('application/x-onefolder-folder', JSON.stringify({ libraryId: node.libraryId, path: node.relativePath } satisfies DraggedFolder));
+            event.dataTransfer.setData('text/plain', node.relativePath);
+          }}
+          onClick={() => onSelect({ libraryId: node.libraryId, folder: node.relativePath })}
+          onDragOver={(event) => {
+            if (readOnly || !canDropOnFolder(event.dataTransfer, node)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.dataTransfer.dropEffect = 'move';
+            setDropTarget(true);
+          }}
+          onDragLeave={() => setDropTarget(false)}
+          onDrop={(event) => {
+            if (readOnly) return;
+            const rawFolder = event.dataTransfer.getData('application/x-onefolder-folder');
+            const rawIds = event.dataTransfer.getData('application/x-onefolder-media');
+            if (!rawIds && !rawFolder) return;
+            event.preventDefault();
+            event.stopPropagation();
+            setDropTarget(false);
+            if (rawFolder) {
+              const folder = parseDraggedFolder(rawFolder);
+              if (!folder) return;
+              if (canMoveFolderTo(folder, node)) void onMoveFolder(folder, { libraryId: node.libraryId, folder: node.relativePath });
+              return;
+            }
+            if (rawIds) {
+              const ids = JSON.parse(rawIds) as string[];
+              void onMove(ids, { libraryId: node.libraryId, folder: node.relativePath });
+            }
+          }}
+        >
+          <span>{node.name}</span>
+          <small>{node.itemCount}</small>
+        </button>
+      </div>
+      {hasChildren && !isCollapsed && node.children.map((child) => (
+        <FolderNodeView
+          key={child.id}
+          node={child}
+          collapsed={collapsed}
+          selected={selected}
+          readOnly={readOnly}
+          onSelect={onSelect}
+          onMove={onMove}
+          onMoveFolder={onMoveFolder}
+          onToggle={onToggle}
+        />
       ))}
     </div>
   );
@@ -938,12 +1067,14 @@ type TagTreeNode = {
 
 function TagManager(props: {
   tags: string[];
+  aliases: Record<string, string[]>;
   selectedCount: number;
   readOnly: boolean;
   onFilter: (tag: string) => void;
   onApply: (tag: string) => Promise<void>;
   onRemoveFromSelection: (tag: string) => Promise<void>;
   onCatalogSave: (tags: string[]) => Promise<void>;
+  onAliasesSave: (tag: string, aliases: string[]) => Promise<void>;
   onRename: (from: string, to: string) => Promise<void>;
   onMove: (tag: string, newParent: string) => Promise<void>;
   onDelete: (tag: string) => Promise<void>;
@@ -951,8 +1082,23 @@ function TagManager(props: {
   const [selectedTag, setSelectedTag] = useState('');
   const [newTagName, setNewTagName] = useState('');
   const [renameDraft, setRenameDraft] = useState('');
+  const [aliasDraft, setAliasDraft] = useState('');
+  const [collapsedTags, setCollapsedTags] = useState<Set<string>>(() => new Set());
   const [rootDropTarget, setRootDropTarget] = useState(false);
   const tree = useMemo(() => buildTagTree(props.tags), [props.tags]);
+
+  useEffect(() => {
+    setAliasDraft(selectedTag ? (props.aliases[selectedTag] ?? []).join(', ') : '');
+  }, [props.aliases, selectedTag]);
+
+  const toggleCollapsedTag = (tag: string) => {
+    setCollapsedTags((current) => {
+      const next = new Set(current);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      return next;
+    });
+  };
 
   const createTag = async () => {
     const clean = normalizeTag(newTagName);
@@ -973,12 +1119,18 @@ function TagManager(props: {
     setRenameDraft('');
   };
 
+  const saveAliases = async () => {
+    if (!selectedTag) return;
+    const aliases = aliasDraft.split(',').map(normalizeTag).filter((alias) => alias && alias !== selectedTag);
+    await props.onAliasesSave(selectedTag, Array.from(new Set(aliases)));
+  };
+
   return (
     <section className="tag-manager">
       <div className="tag-manager-tree">
         <strong>Tags</strong>
         <button
-          className={`${!selectedTag ? 'selected' : ''} ${rootDropTarget ? 'drop-target' : ''}`}
+          className={`tree-item ${!selectedTag ? 'selected' : ''} ${rootDropTarget ? 'drop-target' : ''}`}
           onClick={() => setSelectedTag('')}
           onDragOver={(event) => {
             if (props.readOnly || !event.dataTransfer.types.includes('application/x-onefolder-tag')) return;
@@ -1003,12 +1155,14 @@ function TagManager(props: {
             key={node.path}
             node={node}
             selectedTag={selectedTag}
+            collapsed={collapsedTags}
             readOnly={props.readOnly}
             onSelect={(tag) => {
               setSelectedTag(tag);
               setRenameDraft(tag.split('/').at(-1) ?? tag);
             }}
             onMove={props.onMove}
+            onToggle={toggleCollapsedTag}
           />
         ))}
       </div>
@@ -1047,6 +1201,24 @@ function TagManager(props: {
           />
           <button title="Rename tag" onClick={renameSelected} disabled={props.readOnly || !selectedTag || !renameDraft.trim()}><Pencil size={17} /></button>
         </div>
+        <label className="tag-alias-editor">
+          Aliases
+          <div className="inline-input">
+            <input
+              value={aliasDraft}
+              onChange={(event) => setAliasDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void saveAliases();
+                }
+              }}
+              placeholder="doggo, perro, inu"
+              disabled={props.readOnly || !selectedTag}
+            />
+            <button title="Save aliases" onClick={saveAliases} disabled={props.readOnly || !selectedTag}><Check size={17} /></button>
+          </div>
+        </label>
         <div className="tag-manager-buttons">
           <button onClick={() => selectedTag && props.onFilter(selectedTag)} disabled={!selectedTag}>Filter</button>
           <button onClick={() => selectedTag && void props.onApply(selectedTag)} disabled={props.readOnly || !selectedTag || props.selectedCount === 0}>Apply</button>
@@ -1061,55 +1233,79 @@ function TagManager(props: {
 function TagNodeView({
   node,
   selectedTag,
+  collapsed,
   readOnly,
   onSelect,
   onMove,
+  onToggle,
 }: {
   node: TagTreeNode;
   selectedTag: string;
+  collapsed: Set<string>;
   readOnly: boolean;
   onSelect: (tag: string) => void;
   onMove: (tag: string, newParent: string) => Promise<void>;
+  onToggle: (tag: string) => void;
 }) {
   const [isDropTarget, setDropTarget] = useState(false);
+  const hasChildren = node.children.length > 0;
+  const isCollapsed = collapsed.has(node.path);
   return (
     <div className="tag-node">
-      <button
-        className={`${selectedTag === node.path ? 'selected' : ''} ${isDropTarget ? 'drop-target' : ''}`}
-        draggable={!readOnly}
-        onDragStart={(event) => {
-          event.stopPropagation();
-          event.dataTransfer.effectAllowed = 'move';
-          event.dataTransfer.setData('application/x-onefolder-tag', node.path);
-          event.dataTransfer.setData('text/plain', node.path);
-        }}
-        onDragOver={(event) => {
-          if (readOnly || !event.dataTransfer.types.includes('application/x-onefolder-tag')) return;
-          const dragged = event.dataTransfer.getData('application/x-onefolder-tag');
-          if (dragged && (dragged === node.path || node.path.startsWith(`${dragged}/`))) return;
-          event.preventDefault();
-          event.stopPropagation();
-          event.dataTransfer.dropEffect = 'move';
-          setDropTarget(true);
-        }}
-        onDragLeave={() => setDropTarget(false)}
-        onDrop={(event) => {
-          if (readOnly) return;
-          const tag = event.dataTransfer.getData('application/x-onefolder-tag');
-          if (!tag || tag === node.path || node.path.startsWith(`${tag}/`)) return;
-          event.preventDefault();
-          event.stopPropagation();
-          setDropTarget(false);
-          void onMove(tag, node.path);
-        }}
-        onClick={() => onSelect(node.path)}
-      >
-        {node.name}
-      </button>
-      {node.children.length > 0 && (
-        <div>
+      <div className="tree-row">
+        {hasChildren ? (
+          <button className="tree-toggle" title={isCollapsed ? 'Expand tag' : 'Collapse tag'} onClick={() => onToggle(node.path)}>
+            {isCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+          </button>
+        ) : (
+          <span className="tree-toggle-spacer" />
+        )}
+        <button
+          className={`tree-item ${selectedTag === node.path ? 'selected' : ''} ${isDropTarget ? 'drop-target' : ''}`}
+          draggable={!readOnly}
+          onDragStart={(event) => {
+            event.stopPropagation();
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('application/x-onefolder-tag', node.path);
+            event.dataTransfer.setData('text/plain', node.path);
+          }}
+          onDragOver={(event) => {
+            if (readOnly || !event.dataTransfer.types.includes('application/x-onefolder-tag')) return;
+            const dragged = event.dataTransfer.getData('application/x-onefolder-tag');
+            if (dragged && (dragged === node.path || node.path.startsWith(`${dragged}/`))) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.dataTransfer.dropEffect = 'move';
+            setDropTarget(true);
+          }}
+          onDragLeave={() => setDropTarget(false)}
+          onDrop={(event) => {
+            if (readOnly) return;
+            const tag = event.dataTransfer.getData('application/x-onefolder-tag');
+            if (!tag || tag === node.path || node.path.startsWith(`${tag}/`)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            setDropTarget(false);
+            void onMove(tag, node.path);
+          }}
+          onClick={() => onSelect(node.path)}
+        >
+          {node.name}
+        </button>
+      </div>
+      {hasChildren && !isCollapsed && (
+        <div className="tag-children">
           {node.children.map((child) => (
-            <TagNodeView key={child.path} node={child} selectedTag={selectedTag} readOnly={readOnly} onSelect={onSelect} onMove={onMove} />
+            <TagNodeView
+              key={child.path}
+              node={child}
+              selectedTag={selectedTag}
+              collapsed={collapsed}
+              readOnly={readOnly}
+              onSelect={onSelect}
+              onMove={onMove}
+              onToggle={onToggle}
+            />
           ))}
         </div>
       )}
@@ -1961,6 +2157,39 @@ function buildTagTree(tags: string[]): TagTreeNode[] {
     nodes.forEach((node) => sortNodes(node.children));
   };
   sortNodes(roots);
+  return roots;
+}
+
+function buildTagSummaryTree(summaries: TagSummary[]): TagSummaryTreeNode[] {
+  const roots: TagSummaryTreeNode[] = [];
+  const byPath = new Map<string, TagSummaryTreeNode>();
+  const counts = new Map<string, number>();
+
+  summaries.forEach((summary) => {
+    const tag = normalizeTag(summary.tag);
+    if (tag) counts.set(tag, summary.count);
+  });
+
+  counts.forEach((_count, tag) => {
+    const parts = tag.split('/');
+    parts.forEach((part, index) => {
+      const path = parts.slice(0, index + 1).join('/');
+      if (byPath.has(path)) return;
+      const node: TagSummaryTreeNode = {
+        tag: path,
+        name: part,
+        count: counts.get(path) ?? 0,
+        children: [],
+      };
+      byPath.set(path, node);
+      if (index === 0) {
+        roots.push(node);
+      } else {
+        byPath.get(parts.slice(0, index).join('/'))?.children.push(node);
+      }
+    });
+  });
+
   return roots;
 }
 

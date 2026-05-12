@@ -10,6 +10,8 @@ import { canCreateThumbnail, ensureThumbnail, isMediaExtension, mediaKindForExte
 
 let cachedFiles: MediaItem[] = [];
 let cachedTagCatalog: string[] = [];
+let cachedAliasCanonical = new Map<string, string>();
+let cachedCanonicalAliases = new Map<string, Set<string>>();
 let scanInFlight: Promise<MediaItem[]> | undefined;
 let indexStatus: IndexStatus = {
   isScanning: false,
@@ -52,6 +54,12 @@ export async function scanLibraries(): Promise<MediaItem[]> {
   return scanInFlight;
 }
 
+export async function refreshTagSettings(): Promise<void> {
+  const settings = await loadSettings();
+  cachedTagCatalog = settings.tagCatalog.map(normalizeTag).filter(Boolean);
+  cacheTagAliases(settings.tagAliases);
+}
+
 async function doScan(): Promise<MediaItem[]> {
   const started = Date.now();
   indexStatus = {
@@ -65,6 +73,7 @@ async function doScan(): Promise<MediaItem[]> {
   };
   const settings = await loadSettings();
   cachedTagCatalog = settings.tagCatalog.map(normalizeTag).filter(Boolean);
+  cacheTagAliases(settings.tagAliases);
   const previousByKey = new Map(cachedFiles.map((item) => [`${item.libraryId}:${item.relativePath}`, item]));
   const discovered: MediaItem[] = [];
   try {
@@ -209,7 +218,7 @@ export function normalizeTag(value: string): string {
 
 export function filterMedia(query: MediaQuery): MediaItem[] {
   const q = query.q?.trim().toLowerCase();
-  const tags = (query.tags ?? []).map(normalizeTag).filter(Boolean);
+  const tags = (query.tags ?? []).map(resolveTagAlias).filter(Boolean);
   const tagExpression = query.tagExpression?.trim() ? parseTagExpression(query.tagExpression) : undefined;
   const folder = query.folder ? normalizeSlashes(query.folder) : undefined;
 
@@ -259,7 +268,7 @@ export function resolveThumbnailPath(id: string, size: ThumbnailSize = 'grid'): 
 
 export async function updateTags(request: { ids: string[]; tags: string[]; mode: 'replace' | 'add' | 'remove'; description?: string }) {
   const settings = await loadSettings();
-  const normalizedTags = canonicalizeRequestedTags(request.tags, settings.tagCatalog);
+  const normalizedTags = canonicalizeRequestedTags(request.tags, settings.tagCatalog, settings.tagAliases);
   const files = cachedFiles.filter((item) => request.ids.includes(item.id));
   for (const item of files) {
     const absolutePath = await resolveMediaPath(item.id);
@@ -389,6 +398,11 @@ export async function renameTagEverywhere(from: string, to: string) {
   return { changed, files: await scanLibraries() };
 }
 
+export function resolveTagAlias(tag: string): string {
+  const normalized = normalizeTag(tag);
+  return cachedAliasCanonical.get(normalized) ?? normalized;
+}
+
 export async function removeTagEverywhere(tag: string) {
   const normalizedTag = normalizeTag(tag);
   if (!normalizedTag) throw new Error('Tag name is required');
@@ -407,9 +421,13 @@ export async function removeTagEverywhere(tag: string) {
 }
 
 export function listKnownTags(): string[] {
-  return Array.from(new Set([...cachedTagCatalog, ...currentFiles().flatMap((item) => expandTagPathAncestors(item.tags))])).sort(
-    (a, b) => a.localeCompare(b),
-  );
+  return Array.from(
+    new Set([
+      ...cachedTagCatalog,
+      ...Array.from(cachedCanonicalAliases.values()).flatMap((aliases) => Array.from(aliases)),
+      ...currentFiles().flatMap((item) => expandTagPathAncestors(item.tags)),
+    ]),
+  ).sort((a, b) => a.localeCompare(b));
 }
 
 export function listTagSummaries(): TagSummary[] {
@@ -419,7 +437,7 @@ export function listTagSummaries(): TagSummary[] {
   }
 
   for (const item of currentFiles()) {
-    for (const tag of expandTagPathAncestors(item.tags)) {
+    for (const tag of expandTagPathAncestors(item.tags.map(resolveTagAlias))) {
       counts.set(tag, (counts.get(tag) ?? 0) + 1);
     }
   }
@@ -579,6 +597,19 @@ async function moveDirectory(source: string, destination: string): Promise<void>
 
 function tagMatchesFilter(filter: string, itemTag: string): boolean {
   const normalizedTag = normalizeTag(itemTag);
+  const normalizedFilter = resolveTagAlias(filter);
+  const tagEquivalents = equivalentTags(normalizedTag);
+  const filterEquivalents = equivalentTags(normalizedFilter);
+  if (tagEquivalents.some((tag) => filterEquivalents.some((filterTag) => tagMatchesNormalizedFilter(filterTag, tag)))) {
+    return true;
+  }
+
+  const descendantTags = descendantsOfTag(normalizedFilter);
+  return descendantTags.some((tagPath) => tagEquivalents.some((tag) => tagPath === tag || tagPath.endsWith(`/${tag}`)));
+}
+
+function tagMatchesNormalizedFilter(filter: string, itemTag: string): boolean {
+  const normalizedTag = normalizeTag(itemTag);
   const normalizedFilter = normalizeTag(filter);
   if (
     normalizedTag === normalizedFilter ||
@@ -587,9 +618,7 @@ function tagMatchesFilter(filter: string, itemTag: string): boolean {
   ) {
     return true;
   }
-
-  const descendantTags = descendantsOfTag(normalizedFilter);
-  return descendantTags.some((tagPath) => tagPath === normalizedTag || tagPath.endsWith(`/${normalizedTag}`));
+  return false;
 }
 
 function parseTagExpression(expression: string): TagExpressionNode | undefined {
@@ -643,7 +672,7 @@ function tokenizeTagExpression(expression: string): TagExpressionToken[] {
   let index = 0;
 
   const pushTag = () => {
-    const tag = normalizeTag(buffer);
+    const tag = resolveTagAlias(buffer);
     if (tag) tokens.push({ type: 'tag', value: tag });
     buffer = '';
   };
@@ -690,15 +719,20 @@ function evaluateTagExpression(expression: TagExpressionNode, itemTags: string[]
   return evaluateTagExpression(expression.left, itemTags) || evaluateTagExpression(expression.right, itemTags);
 }
 
-function canonicalizeRequestedTags(tags: string[], catalogTags: string[]): string[] {
+function canonicalizeRequestedTags(tags: string[], catalogTags: string[], tagAliases: Record<string, string[]> = {}): string[] {
   const knownTags = knownTagPaths(catalogTags);
-  return Array.from(new Set(tags.map((tag) => resolveKnownTagPath(tag, knownTags)).filter(Boolean)));
+  return Array.from(new Set(tags.map((tag) => resolveKnownTagPath(resolveTagAliasFromMap(tag, tagAliases), knownTags)).filter(Boolean)));
 }
 
 function knownTagPaths(catalogTags: string[]): string[] {
   return Array.from(
     new Set(
-      [...cachedTagCatalog, ...catalogTags, ...cachedFiles.flatMap((item) => expandTagPathAncestors(item.tags))]
+      [
+        ...cachedTagCatalog,
+        ...catalogTags,
+        ...Array.from(cachedCanonicalAliases.values()).flatMap((aliases) => Array.from(aliases)),
+        ...cachedFiles.flatMap((item) => expandTagPathAncestors(item.tags)),
+      ]
         .map(normalizeTag)
         .filter(Boolean),
     ),
@@ -766,6 +800,37 @@ function descendantsOfTag(filter: string): string[] {
     .map(normalizeTag)
     .filter(Boolean)
     .filter((tag) => tag === normalizedFilter || tag.startsWith(`${normalizedFilter}/`) || tag.split('/').includes(normalizedFilter));
+}
+
+function cacheTagAliases(tagAliases: Record<string, string[]> = {}) {
+  cachedAliasCanonical = new Map<string, string>();
+  cachedCanonicalAliases = new Map<string, Set<string>>();
+  for (const [tag, aliases] of Object.entries(tagAliases)) {
+    const canonical = normalizeTag(tag);
+    if (!canonical) continue;
+    const members = new Set([canonical, ...aliases.map(normalizeTag).filter(Boolean)]);
+    cachedCanonicalAliases.set(canonical, members);
+    for (const member of members) {
+      cachedAliasCanonical.set(member, canonical);
+    }
+  }
+}
+
+function equivalentTags(tag: string): string[] {
+  const normalized = normalizeTag(tag);
+  const canonical = cachedAliasCanonical.get(normalized) ?? normalized;
+  return Array.from(cachedCanonicalAliases.get(canonical) ?? new Set([canonical]));
+}
+
+export function resolveTagAliasFromMap(tag: string, tagAliases: Record<string, string[]>): string {
+  const normalized = normalizeTag(tag);
+  for (const [canonical, aliases] of Object.entries(tagAliases)) {
+    const cleanCanonical = normalizeTag(canonical);
+    if (!cleanCanonical) continue;
+    const members = [cleanCanonical, ...aliases.map(normalizeTag).filter(Boolean)];
+    if (members.includes(normalized)) return cleanCanonical;
+  }
+  return normalized;
 }
 
 async function uniquePath(initialPath: string): Promise<string> {

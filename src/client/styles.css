@@ -174,7 +174,40 @@ textarea {
   padding-right: 2px;
 }
 
-.sidebar-tag-list button {
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tree-toggle,
+.tree-toggle-spacer {
+  flex: 0 0 24px;
+  width: 24px;
+}
+
+.tree-toggle {
+  display: inline-grid;
+  min-height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 0;
+  color: #a8adb6;
+}
+
+.tree-toggle:hover:not(:disabled) {
+  border-color: transparent;
+  background: #282c34;
+}
+
+.tree-item {
+  min-width: 0;
+}
+
+.sidebar-tag-list .tree-item {
   display: grid;
   width: 100%;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -187,7 +220,7 @@ textarea {
   text-align: left;
 }
 
-.sidebar-tag-list button.selected {
+.sidebar-tag-list .tree-item.selected {
   background: #2d3645;
   color: #ffffff;
 }
@@ -207,6 +240,11 @@ textarea {
   padding: 8px 10px;
 }
 
+.sidebar-tag-children {
+  display: grid;
+  gap: 2px;
+}
+
 .folder-tree {
   display: flex;
   flex: 1;
@@ -217,7 +255,8 @@ textarea {
   padding-right: 2px;
 }
 
-.folder-tree button {
+.folder-tree > button,
+.folder-tree .tree-item {
   display: flex;
   width: 100%;
   align-items: center;
@@ -229,12 +268,14 @@ textarea {
   text-align: left;
 }
 
-.folder-tree button.selected {
+.folder-tree > button.selected,
+.folder-tree .tree-item.selected {
   background: #2d3645;
   color: #ffffff;
 }
 
-.folder-tree button.drop-target {
+.folder-tree > button.drop-target,
+.folder-tree .tree-item.drop-target {
   background: #334f3d;
   outline: 1px solid #75a982;
 }
@@ -729,8 +770,10 @@ textarea {
   overflow: auto;
 }
 
-.tag-manager-tree button,
-.tag-node button {
+.tag-manager-tree > .tree-item,
+.tag-node .tree-item {
+  display: flex;
+  align-items: center;
   width: 100%;
   justify-content: flex-start;
   border: 0;
@@ -740,26 +783,26 @@ textarea {
   text-align: left;
 }
 
-.tag-manager-tree button.selected,
-.tag-node button.selected {
+.tag-manager-tree > .tree-item.selected,
+.tag-node .tree-item.selected {
   background: #2d3645;
 }
 
-.tag-manager-tree button.drop-target,
-.tag-node button.drop-target {
+.tag-manager-tree > .tree-item.drop-target,
+.tag-node .tree-item.drop-target {
   background: #334f3d;
   outline: 1px solid #75a982;
 }
 
-.tag-node button[draggable="true"] {
+.tag-node .tree-item[draggable="true"] {
   cursor: grab;
 }
 
-.tag-node button[draggable="true"]:active {
+.tag-node .tree-item[draggable="true"]:active {
   cursor: grabbing;
 }
 
-.tag-node > div {
+.tag-children {
   margin-left: 14px;
 }
 
@@ -791,6 +834,12 @@ textarea {
   gap: 7px;
   border-radius: 6px;
   padding: 0 12px;
+}
+
+.tag-alias-editor {
+  display: grid;
+  gap: 7px;
+  color: #d6d9de;
 }
 
 .settings-panel > div:first-child {

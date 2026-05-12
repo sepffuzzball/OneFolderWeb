@@ -12,6 +12,7 @@ export type LibrarySettings = {
 export type AppSettings = {
   libraries: LibrarySettings[];
   tagCatalog: string[];
+  tagAliases: Record<string, string[]>;
 };
 
 export type RuntimeConfig = {
@@ -129,6 +130,11 @@ export type DeleteMediaRequest = {
 
 export type TagCatalogUpdateRequest = {
   tags: string[];
+};
+
+export type TagAliasUpdateRequest = {
+  tag: string;
+  aliases: string[];
 };
 
 export type RenameTagRequest = {

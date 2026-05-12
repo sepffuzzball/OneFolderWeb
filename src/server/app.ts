@@ -20,6 +20,7 @@ import {
   normalizeTag,
   removeTagEverywhere,
   renameTagEverywhere,
+  refreshTagSettings,
   resolveMediaPath,
   resolveThumbnailPath,
   scanLibraries,
@@ -36,6 +37,7 @@ import type {
   MediaQuery,
   MoveFolderRequest,
   MoveMediaRequest,
+  TagAliasUpdateRequest,
   RenameTagRequest,
   TagCatalogUpdateRequest,
   TagSummary,
@@ -88,7 +90,9 @@ export async function createApp(): Promise<express.Express> {
     ensureWritable,
     asyncHandler(async (req, res) => {
       const settings = req.body as AppSettings;
-      res.json({ data: await saveSettings(settings) });
+      const next = await saveSettings(settings);
+      await refreshTagSettings();
+      res.json({ data: next });
       void scanLibraries();
     }),
   );
@@ -158,9 +162,9 @@ export async function createApp(): Promise<express.Express> {
     '/api/tags',
     asyncHandler(async (_req, res) => {
       const settings = await loadSettings();
-      const tags = Array.from(new Set([...settings.tagCatalog, ...listKnownTags()].map(normalizeTag).filter(Boolean))).sort(
-        (a, b) => a.localeCompare(b),
-      );
+      const tags = Array.from(
+        new Set([...settings.tagCatalog, ...Object.values(settings.tagAliases).flat(), ...listKnownTags()].map(normalizeTag).filter(Boolean)),
+      ).sort((a, b) => a.localeCompare(b));
       res.json({ data: tags });
     }),
   );
@@ -181,7 +185,37 @@ export async function createApp(): Promise<express.Express> {
           a.localeCompare(b),
         ),
       });
+      await refreshTagSettings();
       res.json({ data: next.tagCatalog });
+    }),
+  );
+
+  app.put(
+    '/api/tags/aliases',
+    ensureWritable,
+    asyncHandler(async (req, res) => {
+      const payload = req.body as TagAliasUpdateRequest;
+      const settings = await loadSettings();
+      const tag = normalizeTag(payload.tag);
+      if (!tag) {
+        res.status(400).json({ error: 'Tag is required.' });
+        return;
+      }
+      const aliases = Array.from(
+        new Set((payload.aliases ?? []).map(normalizeTag).filter((alias) => alias && alias !== tag)),
+      ).sort((a, b) => a.localeCompare(b));
+      const nextAliases = { ...settings.tagAliases };
+      for (const [existingTag, existingAliases] of Object.entries(nextAliases)) {
+        const normalizedExisting = normalizeTag(existingTag);
+        if (normalizedExisting === tag) continue;
+        nextAliases[existingTag] = existingAliases.filter((alias) => !aliases.includes(normalizeTag(alias)) && normalizeTag(alias) !== tag);
+        if (nextAliases[existingTag].length === 0) delete nextAliases[existingTag];
+      }
+      if (aliases.length > 0) nextAliases[tag] = aliases;
+      else delete nextAliases[tag];
+      const next = await saveSettings({ ...settings, tagAliases: nextAliases });
+      await refreshTagSettings();
+      res.json({ data: next.tagAliases });
     }),
   );
 
@@ -204,6 +238,7 @@ export async function createApp(): Promise<express.Express> {
             return normalized;
           })
           .filter(Boolean),
+        tagAliases: renameTagAliases(settings.tagAliases, from, to),
       });
       res.json({ data: renamed });
     }),
@@ -223,6 +258,7 @@ export async function createApp(): Promise<express.Express> {
           const target = tag.toLowerCase();
           return normalized !== target && !normalized.startsWith(`${target}/`);
         }),
+        tagAliases: removeTagAliases(settings.tagAliases, tag),
       });
       res.json({ data: removed });
     }),
@@ -388,6 +424,48 @@ function boundedNumber(value: unknown, fallback: number, min: number, max: numbe
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, Math.trunc(parsed)));
+}
+
+function renameTagAliases(tagAliases: Record<string, string[]>, from: string, to: string): Record<string, string[]> {
+  const normalizedFrom = normalizeTag(from).toLowerCase();
+  const normalizedTo = normalizeTag(to);
+  const renamed: Record<string, string[]> = {};
+  for (const [tag, aliases] of Object.entries(tagAliases)) {
+    const normalizedTag = normalizeTag(tag);
+    const nextTag =
+      normalizedTag.toLowerCase() === normalizedFrom
+        ? normalizedTo
+        : normalizedTag.toLowerCase().startsWith(`${normalizedFrom}/`)
+          ? `${normalizedTo}${normalizedTag.slice(normalizedFrom.length)}`
+          : normalizedTag;
+    const nextAliases = aliases
+      .map((alias) => {
+        const normalizedAlias = normalizeTag(alias);
+        if (normalizedAlias.toLowerCase() === normalizedFrom) return normalizedTo;
+        if (normalizedAlias.toLowerCase().startsWith(`${normalizedFrom}/`)) return `${normalizedTo}${normalizedAlias.slice(normalizedFrom.length)}`;
+        return normalizedAlias;
+      })
+      .filter((alias) => alias && alias !== nextTag);
+    if (nextTag && nextAliases.length > 0) renamed[nextTag] = Array.from(new Set([...(renamed[nextTag] ?? []), ...nextAliases])).sort((a, b) =>
+      a.localeCompare(b),
+    );
+  }
+  return renamed;
+}
+
+function removeTagAliases(tagAliases: Record<string, string[]>, tag: string): Record<string, string[]> {
+  const target = normalizeTag(tag).toLowerCase();
+  const kept: Record<string, string[]> = {};
+  for (const [aliasTag, aliases] of Object.entries(tagAliases)) {
+    const normalizedTag = normalizeTag(aliasTag).toLowerCase();
+    if (normalizedTag === target || normalizedTag.startsWith(`${target}/`)) continue;
+    const nextAliases = aliases.filter((alias) => {
+      const normalizedAlias = normalizeTag(alias).toLowerCase();
+      return normalizedAlias !== target && !normalizedAlias.startsWith(`${target}/`);
+    });
+    if (nextAliases.length > 0) kept[aliasTag] = nextAliases;
+  }
+  return kept;
 }
 
 function hasTagExpressionOperators(value: string): boolean {
