@@ -16,11 +16,13 @@ import {
   LayoutList,
   Link,
   Pencil,
+  Play,
   Plus,
   Rows3,
   Search,
   Settings,
   Shield,
+  Shuffle,
   SlidersHorizontal,
   Sparkles,
   Tags,
@@ -29,12 +31,13 @@ import {
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { AppSettings, FolderNode, IndexStatus, MediaItem, PagedMediaResponse, RuntimeConfig, TagSummary, ViewMode } from '../shared/types.js';
 
 type Toast = { id: number; message: string };
 type SidebarTab = 'libraries' | 'tags';
 type TagSortMode = 'alpha' | 'count';
+type BrowseOrderMode = 'linear' | 'shuffle';
 type ExportAspect = 'original' | '16:9' | '16:10' | '1:1';
 type CropRect = { x: number; y: number; width: number; height: number };
 type CropHandle = 'nw' | 'ne' | 'sw' | 'se';
@@ -73,6 +76,10 @@ export function App() {
   const [folderDraft, setFolderDraft] = useState('');
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('libraries');
   const [tagSort, setTagSort] = useState<TagSortMode>('alpha');
+  const [browseOrder, setBrowseOrder] = useState<BrowseOrderMode>('linear');
+  const [shuffleIds, setShuffleIds] = useState<string[]>([]);
+  const [slideshowOpen, setSlideshowOpen] = useState(false);
+  const [slideshowSeconds, setSlideshowSeconds] = useState(7);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tagManagerOpen, setTagManagerOpen] = useState(false);
   const [isDragging, setDragging] = useState(false);
@@ -104,6 +111,8 @@ export function App() {
       ),
     [managedTags, settings?.tagAliases],
   );
+  const orderedItems = useMemo(() => (browseOrder === 'shuffle' ? orderItemsByIds(items, shuffleIds) : items), [browseOrder, items, shuffleIds]);
+  const slideshowItems = useMemo(() => orderedItems.filter(isSlideshowItem), [orderedItems]);
 
   const notify = useCallback((message: string) => {
     const id = Date.now();
@@ -167,6 +176,11 @@ export function App() {
     loadedLimitRef.current = MEDIA_PAGE_SIZE;
   }, [folderFilter.folder, folderFilter.libraryId, debouncedQuery, debouncedTagFilter]);
 
+  useEffect(() => {
+    if (browseOrder !== 'shuffle') return;
+    setShuffleIds((ids) => reconcileShuffleIds(ids, items.map((item) => item.id)));
+  }, [browseOrder, items]);
+
   const prefetchMoreMedia = useCallback(async () => {
     if (prefetchInFlightRef.current || isLoadingLibrary || items.length >= mediaTotal) return;
     prefetchInFlightRef.current = true;
@@ -187,18 +201,18 @@ export function App() {
   const navigateActiveItem = useCallback(
     (direction: -1 | 1) => {
       if (!activeId) return;
-      const currentIndex = items.findIndex((item) => item.id === activeId);
+      const currentIndex = orderedItems.findIndex((item) => item.id === activeId);
       if (currentIndex === -1) return;
-      const nextItem = items[currentIndex + direction];
+      const nextItem = orderedItems[currentIndex + direction];
       if (!nextItem) return;
       selectionAnchorId.current = nextItem.id;
       setSelectedIds([nextItem.id]);
       setDescriptionDraft(nextItem.description);
       setTagDraft('');
       setActiveId(nextItem.id);
-      if (direction > 0 && items.length < mediaTotal && currentIndex >= items.length - 3) void prefetchMoreMedia();
+      if (direction > 0 && items.length < mediaTotal && currentIndex >= orderedItems.length - 3) void prefetchMoreMedia();
     },
-    [activeId, items, mediaTotal, prefetchMoreMedia],
+    [activeId, items.length, mediaTotal, orderedItems, prefetchMoreMedia],
   );
 
   useEffect(() => {
@@ -245,11 +259,11 @@ export function App() {
     setActiveId(null);
     setDescriptionDraft(item.description);
     if (event?.shiftKey && selectionAnchorId.current) {
-      const anchorIndex = items.findIndex((candidate) => candidate.id === selectionAnchorId.current);
-      const itemIndex = items.findIndex((candidate) => candidate.id === item.id);
+      const anchorIndex = orderedItems.findIndex((candidate) => candidate.id === selectionAnchorId.current);
+      const itemIndex = orderedItems.findIndex((candidate) => candidate.id === item.id);
       if (anchorIndex !== -1 && itemIndex !== -1) {
         const [start, end] = [anchorIndex, itemIndex].sort((a, b) => a - b);
-        setSelectedIds(items.slice(start, end + 1).map((candidate) => candidate.id));
+        setSelectedIds(orderedItems.slice(start, end + 1).map((candidate) => candidate.id));
         return;
       }
     }
@@ -268,6 +282,22 @@ export function App() {
     setTagDraft('');
     setActiveId(item.id);
   };
+
+  const shuffleCurrentItems = () => {
+    setShuffleIds(shuffleArray(items.map((item) => item.id)));
+    setBrowseOrder('shuffle');
+  };
+
+  const startSlideshow = () => {
+    if (slideshowItems.length === 0) {
+      notify('No images or videos in the current view');
+      return;
+    }
+    setActiveId(null);
+    setSlideshowOpen(true);
+    if (items.length < mediaTotal && slideshowItems.length < 3) void prefetchMoreMedia();
+  };
+  const closeSlideshow = useCallback(() => setSlideshowOpen(false), []);
 
   const clearSelection = () => {
     selectionAnchorId.current = null;
@@ -630,6 +660,26 @@ export function App() {
                 );
               })}
             </div>
+            <div className="browse-order" role="group" aria-label="Browse order">
+              <button title="Linear order" className={browseOrder === 'linear' ? 'active' : ''} onClick={() => setBrowseOrder('linear')}>
+                <LayoutList size={18} />
+              </button>
+              <button title="Shuffle current view" className={browseOrder === 'shuffle' ? 'active' : ''} onClick={shuffleCurrentItems}>
+                <Shuffle size={18} />
+              </button>
+            </div>
+            <label className="slideshow-delay" title="Seconds per slide">
+              <input
+                type="number"
+                min={1}
+                max={600}
+                value={slideshowSeconds}
+                onChange={(event) => setSlideshowSeconds(clampNumber(Number(event.target.value), 1, 600))}
+              />
+            </label>
+            <button title="Start fullscreen slideshow" onClick={startSlideshow}>
+              <Play size={18} />
+            </button>
             <button title="Tag manager" className={tagManagerOpen ? 'active' : ''} onClick={() => setTagManagerOpen((open) => !open)}>
               <Tags size={18} />
             </button>
@@ -692,7 +742,7 @@ export function App() {
 
             <Gallery
               view={view}
-              items={items}
+              items={orderedItems}
               selectedIds={selectedIds}
               hasMore={items.length < mediaTotal}
               isPrefetching={isPrefetchingMedia || isLoadingLibrary}
@@ -729,6 +779,17 @@ export function App() {
           onCopyLink={() => copyShareLink(activeItem)}
           onDownload={() => downloadMedia(activeItem)}
           onDelete={() => deleteItems(selectedIds.length > 0 ? selectedIds : [activeItem.id])}
+        />
+      )}
+
+      {slideshowOpen && (
+        <SlideshowView
+          items={slideshowItems}
+          seconds={slideshowSeconds}
+          hasMore={items.length < mediaTotal}
+          isPrefetching={isPrefetchingMedia || isLoadingLibrary}
+          onPrefetch={prefetchMoreMedia}
+          onClose={closeSlideshow}
         />
       )}
 
@@ -1646,6 +1707,106 @@ function DetailView(props: {
   );
 }
 
+function SlideshowView({
+  items,
+  seconds,
+  hasMore,
+  isPrefetching,
+  onPrefetch,
+  onClose,
+}: {
+  items: MediaItem[];
+  seconds: number;
+  hasMore: boolean;
+  isPrefetching: boolean;
+  onPrefetch: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const [index, setIndex] = useState(0);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const fullscreenEnteredRef = useRef(false);
+  const current = items[index] ?? items[0];
+  const next = useCallback(() => setIndex((value) => (items.length === 0 ? 0 : (value + 1) % items.length)), [items.length]);
+  const previous = () => setIndex((value) => (items.length === 0 ? 0 : (value - 1 + items.length) % items.length));
+
+  useLayoutEffect(() => {
+    const element = rootRef.current;
+    if (!element) return;
+    const request = element.requestFullscreen?.();
+    if (request) {
+      void request.then(() => {
+        fullscreenEnteredRef.current = true;
+      }).catch(() => undefined);
+    }
+    const onFullscreenChange = () => {
+      if (fullscreenEnteredRef.current && document.fullscreenElement !== element) onClose();
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      if (document.fullscreenElement === element) void document.exitFullscreen();
+    };
+  }, [onClose]);
+
+  useEffect(() => {
+    if (items.length === 0) {
+      onClose();
+      return;
+    }
+    setIndex((value) => Math.min(value, items.length - 1));
+  }, [items.length, onClose]);
+
+  useEffect(() => {
+    if (!current) return;
+    const timer = window.setTimeout(next, seconds * 1000);
+    return () => window.clearTimeout(timer);
+  }, [current?.id, next, seconds]);
+
+  useEffect(() => {
+    if (hasMore && !isPrefetching && items.length - index <= 3) void onPrefetch();
+  }, [hasMore, index, isPrefetching, items.length, onPrefetch]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+      if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        next();
+      }
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        previous();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [next, onClose]);
+
+  if (!current) return null;
+
+  return (
+    <section ref={rootRef} className="slideshow" aria-label="Slideshow">
+      <button className="slideshow-close" onClick={onClose}>x</button>
+      <div className="slideshow-stage">
+        {current.kind === 'video' ? (
+          <video key={current.id} src={current.fileUrl} autoPlay muted controls onEnded={next} />
+        ) : (
+          <img key={current.id} src={current.fileUrl} alt={current.name} />
+        )}
+      </div>
+      <div className="slideshow-controls">
+        <button onClick={previous}>Previous</button>
+        <span>{index + 1} / {items.length}</span>
+        <button onClick={next}>Next</button>
+        <strong title={current.relativePath}>{current.name}</strong>
+      </div>
+    </section>
+  );
+}
+
 function FilePreview({ item }: { item: MediaItem }) {
   const isMarkdown = isMarkdownItem(item);
   const [markdownSource, setMarkdownSource] = useState('');
@@ -1881,6 +2042,39 @@ function absoluteUrl(pathname: string): string {
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(value)));
+}
+
+function isSlideshowItem(item: MediaItem): boolean {
+  return item.kind === 'image' || item.kind === 'video';
+}
+
+function orderItemsByIds(items: MediaItem[], ids: string[]): MediaItem[] {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const ordered = ids.map((id) => byId.get(id)).filter((item): item is MediaItem => Boolean(item));
+  const orderedIds = new Set(ordered.map((item) => item.id));
+  return [...ordered, ...items.filter((item) => !orderedIds.has(item.id))];
+}
+
+function reconcileShuffleIds(currentIds: string[], itemIds: string[]): string[] {
+  const visible = new Set(itemIds);
+  const kept = currentIds.filter((id) => visible.has(id));
+  const keptSet = new Set(kept);
+  const added = shuffleArray(itemIds.filter((id) => !keptSet.has(id)));
+  return [...kept, ...added];
+}
+
+function shuffleArray<T>(values: T[]): T[] {
+  const shuffled = [...values];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
 }
 
 function imageItemSize(item: MediaItem): Size | null {
