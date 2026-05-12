@@ -754,6 +754,24 @@ function FolderTree({
   onMoveFolder: (folder: DraggedFolder, target: { libraryId: string; folder?: string }) => Promise<void>;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const appliedDefaultsRef = useRef(new Map<string, boolean>());
+  useEffect(() => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      const visibleIds = new Set(nodes.map((node) => node.id));
+      for (const key of appliedDefaultsRef.current.keys()) {
+        if (!visibleIds.has(key)) appliedDefaultsRef.current.delete(key);
+      }
+      for (const node of nodes) {
+        const startExpanded = node.startExpanded !== false;
+        if (appliedDefaultsRef.current.get(node.id) === startExpanded) continue;
+        appliedDefaultsRef.current.set(node.id, startExpanded);
+        if (startExpanded) next.delete(node.id);
+        else next.add(node.id);
+      }
+      return next;
+    });
+  }, [nodes]);
   const toggleCollapsed = (id: string) => {
     setCollapsed((current) => {
       const next = new Set(current);
@@ -1827,9 +1845,10 @@ function SettingsPanel({ settings, config, onSaved }: { settings: AppSettings; c
           <input value={library.name} onChange={(event) => setDraft(updateLibrary(draft, index, { name: event.target.value }))} disabled={config.readOnly} />
           <input value={library.path} onChange={(event) => setDraft(updateLibrary(draft, index, { path: event.target.value }))} disabled={config.readOnly} />
           <label><input type="checkbox" checked={library.enabled} onChange={(event) => setDraft(updateLibrary(draft, index, { enabled: event.target.checked }))} disabled={config.readOnly} />Enabled</label>
+          <label><input type="checkbox" checked={library.startExpanded !== false} onChange={(event) => setDraft(updateLibrary(draft, index, { startExpanded: event.target.checked }))} disabled={config.readOnly} />Start expanded</label>
         </div>
       ))}
-      <button onClick={() => setDraft({ ...draft, libraries: [...draft.libraries, { id: crypto.randomUUID(), name: 'Library', path: '', enabled: true }] })} disabled={config.readOnly}>Add library</button>
+      <button onClick={() => setDraft({ ...draft, libraries: [...draft.libraries, { id: crypto.randomUUID(), name: 'Library', path: '', enabled: true, startExpanded: true }] })} disabled={config.readOnly}>Add library</button>
       <button onClick={() => void onSaved(draft)} disabled={config.readOnly}>Save settings</button>
     </section>
   );

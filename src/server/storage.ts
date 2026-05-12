@@ -37,6 +37,7 @@ function defaultSettings(): AppSettings {
     name: 'Library',
     path: paths.dataRoot,
     enabled: true,
+    startExpanded: true,
   };
   return { libraries: [library], tagCatalog: [], tagAliases: {} };
 }
@@ -52,6 +53,7 @@ export async function loadSettings(): Promise<AppSettings> {
       name: library.name || `Library ${index + 1}`,
       path: path.resolve(library.path || paths.dataRoot),
       enabled: library.enabled !== false,
+      startExpanded: library.startExpanded !== false,
     })),
     tagCatalog: Array.from(new Set((settings.tagCatalog ?? []).map(String).filter(Boolean))).sort((a, b) =>
       a.localeCompare(b),
@@ -67,6 +69,7 @@ export async function saveSettings(settings: AppSettings): Promise<AppSettings> 
       name: library.name || `Library ${index + 1}`,
       path: path.resolve(library.path),
       enabled: library.enabled !== false,
+      startExpanded: library.startExpanded !== false,
     })),
     tagCatalog: Array.from(new Set((settings.tagCatalog ?? []).map(String).filter(Boolean))).sort((a, b) =>
       a.localeCompare(b),

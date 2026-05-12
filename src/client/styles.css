@@ -849,7 +849,7 @@ textarea {
 
 .library-row {
   display: grid;
-  grid-template-columns: auto minmax(120px, 0.4fr) minmax(180px, 1fr) auto;
+  grid-template-columns: auto minmax(120px, 0.4fr) minmax(180px, 1fr) auto auto;
   gap: 8px;
   align-items: center;
 }

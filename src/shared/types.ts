@@ -7,6 +7,7 @@ export type LibrarySettings = {
   name: string;
   path: string;
   enabled: boolean;
+  startExpanded: boolean;
 };
 
 export type AppSettings = {
@@ -80,6 +81,7 @@ export type FolderNode = {
   relativePath: string;
   depth: number;
   itemCount: number;
+  startExpanded?: boolean;
   children: FolderNode[];
 };
 

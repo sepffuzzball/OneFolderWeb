@@ -480,6 +480,7 @@ export async function buildFolderTree(files = currentFiles()): Promise<FolderNod
       relativePath: '',
       depth: 0,
       itemCount: 0,
+      startExpanded: librarySettings.startExpanded !== false,
       children: [],
     });
     if (!runtimeConfig.hideEmptyFolders) {
@@ -497,6 +498,7 @@ export async function buildFolderTree(files = currentFiles()): Promise<FolderNod
         relativePath: '',
         depth: 0,
         itemCount: 0,
+        startExpanded: true,
         children: [],
       };
       libraries.set(item.libraryId, library);
