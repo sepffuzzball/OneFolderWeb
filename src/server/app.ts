@@ -23,6 +23,7 @@ import {
   refreshTagSettings,
   resolveMediaPath,
   resolveThumbnailPath,
+  resolveTagAliasFromMap,
   scanLibraries,
   targetUploadDirectory,
   trashMedia,
@@ -163,7 +164,7 @@ export async function createApp(): Promise<express.Express> {
     asyncHandler(async (_req, res) => {
       const settings = await loadSettings();
       const tags = Array.from(
-        new Set([...settings.tagCatalog, ...Object.values(settings.tagAliases).flat(), ...listKnownTags()].map(normalizeTag).filter(Boolean)),
+        new Set([...settings.tagCatalog, ...listKnownTags()].map((tag) => resolveTagAliasFromMap(tag, settings.tagAliases)).filter(Boolean)),
       ).sort((a, b) => a.localeCompare(b));
       res.json({ data: tags });
     }),
@@ -181,7 +182,7 @@ export async function createApp(): Promise<express.Express> {
       const settings = await loadSettings();
       const next = await saveSettings({
         ...settings,
-        tagCatalog: Array.from(new Set(payload.tags.map(normalizeTag).filter(Boolean))).sort((a, b) =>
+        tagCatalog: Array.from(new Set(payload.tags.map((tag) => resolveTagAliasFromMap(tag, settings.tagAliases)).filter(Boolean))).sort((a, b) =>
           a.localeCompare(b),
         ),
       });

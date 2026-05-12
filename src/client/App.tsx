@@ -89,11 +89,11 @@ export function App() {
       Array.from(
         new Set(
           [...(settings?.tagCatalog ?? []), ...knownTags, ...items.flatMap((item) => expandTagPathAncestors(item.tags))]
-            .map(normalizeTag)
+            .map((tag) => resolveTagAlias(tag, settings?.tagAliases ?? {}))
             .filter(Boolean),
         ),
       ).sort((a, b) => a.localeCompare(b)),
-    [items, knownTags, settings?.tagCatalog],
+    [items, knownTags, settings?.tagAliases, settings?.tagCatalog],
   );
   const allTags = useMemo(
     () =>
@@ -2130,6 +2130,17 @@ function expandTagPathAncestors(tags: string[]): string[] {
     }
   });
   return Array.from(expanded);
+}
+
+function resolveTagAlias(tag: string, aliases: Record<string, string[]>): string {
+  const normalized = normalizeTag(tag);
+  if (!normalized) return '';
+  for (const [canonical, aliasList] of Object.entries(aliases)) {
+    const cleanCanonical = normalizeTag(canonical);
+    if (!cleanCanonical) continue;
+    if (cleanCanonical === normalized || aliasList.map(normalizeTag).includes(normalized)) return cleanCanonical;
+  }
+  return normalized;
 }
 
 function buildTagTree(tags: string[]): TagTreeNode[] {

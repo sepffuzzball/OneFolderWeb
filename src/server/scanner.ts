@@ -424,8 +424,7 @@ export function listKnownTags(): string[] {
   return Array.from(
     new Set([
       ...cachedTagCatalog,
-      ...Array.from(cachedCanonicalAliases.values()).flatMap((aliases) => Array.from(aliases)),
-      ...currentFiles().flatMap((item) => expandTagPathAncestors(item.tags)),
+      ...currentFiles().flatMap((item) => expandTagPathAncestors(item.tags.map(resolveTagAlias))),
     ]),
   ).sort((a, b) => a.localeCompare(b));
 }
@@ -730,8 +729,7 @@ function knownTagPaths(catalogTags: string[]): string[] {
       [
         ...cachedTagCatalog,
         ...catalogTags,
-        ...Array.from(cachedCanonicalAliases.values()).flatMap((aliases) => Array.from(aliases)),
-        ...cachedFiles.flatMap((item) => expandTagPathAncestors(item.tags)),
+        ...cachedFiles.flatMap((item) => expandTagPathAncestors(item.tags.map(resolveTagAlias))),
       ]
         .map(normalizeTag)
         .filter(Boolean),
