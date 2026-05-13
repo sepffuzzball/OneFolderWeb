@@ -7,6 +7,7 @@ import multer from 'multer';
 import { runtimeConfig, paths, serverConfig } from './config.js';
 import { closeMetadataTools } from './metadata.js';
 import {
+  addMediaFilesToIndex,
   buildFolderTree,
   createFolder,
   currentIndexStatus,
@@ -24,6 +25,7 @@ import {
   resolveMediaPath,
   resolveThumbnailPath,
   resolveTagAliasFromMap,
+  scheduleLibraryScan,
   scanLibraries,
   targetUploadDirectory,
   trashMedia,
@@ -94,7 +96,7 @@ export async function createApp(): Promise<express.Express> {
       const next = await saveSettings(settings);
       await refreshTagSettings();
       res.json({ data: next });
-      void scanLibraries();
+      scheduleLibraryScan();
     }),
   );
 
@@ -285,13 +287,15 @@ export async function createApp(): Promise<express.Express> {
       const targetPath = req.body.targetPath ? String(req.body.targetPath) : undefined;
       const targetDir = await targetUploadDirectory(libraryId, targetPath);
       const saved: string[] = [];
+      const savedPaths: string[] = [];
       for (const file of files) {
         const filename = safeFileName(file.originalname);
         const finalPath = await uniquePath(path.join(targetDir, filename));
         await moveUploadedFile(file.path, finalPath);
         saved.push(path.basename(finalPath));
+        savedPaths.push(finalPath);
       }
-      await scanLibraries();
+      await addMediaFilesToIndex(libraryId, savedPaths);
       res.json({ data: { saved } });
     }),
   );
@@ -613,10 +617,8 @@ function streamFileToResponse(filePath: string, res: Response): Promise<void> {
 }
 
 function attachScanner() {
-  let timer: NodeJS.Timeout | undefined;
   const queueScan = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => void scanLibraries(), 800);
+    scheduleLibraryScan(2_500);
   };
 
   const watcher = chokidar.watch(paths.dataRoot, {

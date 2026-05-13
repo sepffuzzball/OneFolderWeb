@@ -12,7 +12,10 @@ let cachedFiles: MediaItem[] = [];
 let cachedTagCatalog: string[] = [];
 let cachedAliasCanonical = new Map<string, string>();
 let cachedCanonicalAliases = new Map<string, Set<string>>();
+let cachedDirectoriesByLibrary = new Map<string, Set<string>>();
 let scanInFlight: Promise<MediaItem[]> | undefined;
+let queuedScan: NodeJS.Timeout | undefined;
+let rescanAfterCurrent = false;
 let indexStatus: IndexStatus = {
   isScanning: false,
   phase: 'Idle',
@@ -47,17 +50,38 @@ export function currentIndexStatus(): IndexStatus {
 }
 
 export async function scanLibraries(): Promise<MediaItem[]> {
-  if (scanInFlight) return scanInFlight;
-  scanInFlight = doScan().finally(() => {
+  if (scanInFlight) {
+    rescanAfterCurrent = true;
+    return scanInFlight;
+  }
+  scanInFlight = runScanLoop().finally(() => {
     scanInFlight = undefined;
   });
   return scanInFlight;
+}
+
+export function scheduleLibraryScan(delayMs = 1_500): void {
+  if (queuedScan) clearTimeout(queuedScan);
+  queuedScan = setTimeout(() => {
+    queuedScan = undefined;
+    void scanLibraries();
+  }, delayMs);
+  queuedScan.unref?.();
 }
 
 export async function refreshTagSettings(): Promise<void> {
   const settings = await loadSettings();
   cachedTagCatalog = settings.tagCatalog.map(normalizeTag).filter(Boolean);
   cacheTagAliases(settings.tagAliases);
+}
+
+async function runScanLoop(): Promise<MediaItem[]> {
+  let latest = currentFiles();
+  do {
+    rescanAfterCurrent = false;
+    latest = await doScan();
+  } while (rescanAfterCurrent);
+  return latest;
 }
 
 async function doScan(): Promise<MediaItem[]> {
@@ -75,15 +99,19 @@ async function doScan(): Promise<MediaItem[]> {
   cachedTagCatalog = settings.tagCatalog.map(normalizeTag).filter(Boolean);
   cacheTagAliases(settings.tagAliases);
   const previousByKey = new Map(cachedFiles.map((item) => [`${item.libraryId}:${item.relativePath}`, item]));
+  const discoveredDirectories = new Map<string, Set<string>>();
   const discovered: MediaItem[] = [];
   try {
     for (const library of settings.libraries.filter((item) => item.enabled)) {
       indexStatus = { ...indexStatus, phase: `Scanning ${library.name}`, currentPath: library.path };
       await fs.promises.mkdir(library.path, { recursive: true });
-      const files = await walkLibrary(library, library.path, previousByKey);
+      const libraryDirectories = new Set<string>();
+      discoveredDirectories.set(library.id, libraryDirectories);
+      const files = await walkLibrary(library, library.path, previousByKey, libraryDirectories);
       discovered.push(...files);
     }
     cachedFiles = discovered.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    cachedDirectoriesByLibrary = discoveredDirectories;
     await saveIndex(cachedFiles);
     return currentFiles();
   } finally {
@@ -104,15 +132,18 @@ async function walkLibrary(
   library: LibrarySettings,
   dir: string,
   previousByKey: Map<string, MediaItem>,
+  directories: Set<string>,
 ): Promise<MediaItem[]> {
   if (isPathInside(paths.trashDir, dir)) return [];
+  const relativeDir = normalizeFolderPath(path.relative(library.path, dir));
+  if (relativeDir) directories.add(relativeDir);
   const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
   const items: MediaItem[] = [];
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
     const absolutePath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      items.push(...(await walkLibrary(library, absolutePath, previousByKey)));
+      items.push(...(await walkLibrary(library, absolutePath, previousByKey, directories)));
       continue;
     }
     if (!entry.isFile()) continue;
@@ -253,7 +284,11 @@ export function findMedia(id: string): MediaItem | undefined {
 export async function resolveMediaPath(id: string): Promise<string | undefined> {
   const settings = await loadSettings();
   const item = cachedFiles.find((file) => file.id === id);
-  const library = settings.libraries.find((candidate) => candidate.id === item?.libraryId);
+  return item ? resolveMediaPathForItem(item, settings) : undefined;
+}
+
+function resolveMediaPathForItem(item: MediaItem, settings: { libraries: LibrarySettings[] }): string | undefined {
+  const library = settings.libraries.find((candidate) => candidate.id === item.libraryId);
   if (!item || !library) return undefined;
   const absolutePath = path.resolve(library.path, item.relativePath);
   if (!isPathInside(library.path, absolutePath)) return undefined;
@@ -269,10 +304,11 @@ export function resolveThumbnailPath(id: string, size: ThumbnailSize = 'grid'): 
 export async function updateTags(request: { ids: string[]; tags: string[]; mode: 'replace' | 'add' | 'remove'; description?: string }) {
   const settings = await loadSettings();
   const normalizedTags = canonicalizeRequestedTags(request.tags, settings.tagCatalog, settings.tagAliases);
-  const files = cachedFiles.filter((item) => request.ids.includes(item.id));
-  for (const item of files) {
-    const absolutePath = await resolveMediaPath(item.id);
-    if (!absolutePath) continue;
+  const requestedIds = new Set(request.ids);
+  const files = cachedFiles.filter((item) => requestedIds.has(item.id));
+  const changed = await mapWithConcurrency(files, 4, async (item) => {
+    const absolutePath = resolveMediaPathForItem(item, settings);
+    if (!absolutePath) return undefined;
     const nextTags =
       request.mode === 'replace'
         ? normalizedTags
@@ -280,8 +316,75 @@ export async function updateTags(request: { ids: string[]; tags: string[]; mode:
           ? Array.from(new Set([...item.tags, ...normalizedTags]))
           : item.tags.filter((tag) => !normalizedTags.some((removed) => tagMatchesFilter(removed, tag)));
     await writeMetadata(absolutePath, { tags: nextTags, description: request.description });
+    const stat = await fs.promises.stat(absolutePath).catch(() => undefined);
+    return {
+      ...item,
+      tags: nextTags,
+      description: request.description !== undefined ? request.description : item.description,
+      size: stat?.size ?? item.size,
+      modifiedAt: stat?.mtime.toISOString() ?? item.modifiedAt,
+      indexedAt: new Date().toISOString(),
+    };
+  });
+  replaceCachedItems(changed.filter((item): item is MediaItem => Boolean(item)));
+  await saveIndex(cachedFiles);
+  scheduleLibraryScan(5_000);
+  return currentFiles();
+}
+
+export async function addMediaFilesToIndex(libraryId: string, absolutePaths: string[]): Promise<MediaItem[]> {
+  const settings = await loadSettings();
+  const library = settings.libraries.find((item) => item.id === libraryId);
+  if (!library) throw new Error('Library not found');
+
+  const indexed = (
+    await Promise.all(absolutePaths.map((absolutePath) => buildFastMediaItem(library, absolutePath)))
+  ).filter((item): item is MediaItem => Boolean(item));
+  replaceCachedItems(indexed);
+  for (const item of indexed) addCachedDirectory(library.id, item.folder);
+  await saveIndex(cachedFiles);
+  scheduleLibraryScan(5_000);
+  return indexed;
+}
+
+async function buildFastMediaItem(library: LibrarySettings, absolutePath: string): Promise<MediaItem | undefined> {
+  try {
+    const stat = await fs.promises.stat(absolutePath);
+    if (!stat.isFile()) return undefined;
+    if (!isPathInside(library.path, absolutePath)) return undefined;
+
+    const extension = path.extname(absolutePath).slice(1).toLowerCase();
+    if (!isMediaExtension(extension)) return undefined;
+
+    const relativePath = normalizeSlashes(path.relative(library.path, absolutePath));
+    const id = mediaId(library.id, relativePath);
+    const folder = normalizeFolderPath(path.dirname(relativePath));
+    const thumbnailAvailable = canCreateThumbnail(extension) && fs.existsSync(thumbnailPathFor(id, 'grid'));
+    return {
+      id,
+      libraryId: library.id,
+      libraryName: library.name,
+      relativePath,
+      folder,
+      name: path.basename(absolutePath),
+      extension,
+      kind: mediaKindForExtension(extension),
+      mimeType: mime.lookup(extension) || 'application/octet-stream',
+      size: stat.size,
+      createdAt: stat.birthtime.toISOString(),
+      modifiedAt: stat.mtime.toISOString(),
+      indexedAt: new Date().toISOString(),
+      tags: [],
+      description: '',
+      artist: '',
+      thumbnailUrl: thumbnailAvailable ? `/thumb/${id}?size=grid` : `/file/${id}`,
+      previewThumbnailUrl: thumbnailAvailable ? `/thumb/${id}?size=preview` : `/file/${id}`,
+      fileUrl: `/file/${id}`,
+    };
+  } catch (error) {
+    console.warn(`Could not add ${absolutePath} to index:`, error);
+    return undefined;
   }
-  return scanLibraries();
 }
 
 export async function moveMedia(request: { ids: string[]; libraryId: string; targetPath?: string }) {
@@ -455,8 +558,10 @@ export async function createFolder(libraryId: string, parentPath: string | undef
   const target = path.resolve(library.path, parentPath ?? '', cleanName);
   if (!isPathInside(library.path, target)) throw new Error('Folder escapes the library path');
   await fs.promises.mkdir(target, { recursive: true });
-  await scanLibraries();
-  return normalizeSlashes(path.relative(library.path, target));
+  const relativePath = normalizeSlashes(path.relative(library.path, target));
+  addCachedDirectory(library.id, relativePath);
+  scheduleLibraryScan(5_000);
+  return relativePath;
 }
 
 export async function targetUploadDirectory(libraryId: string, targetPath: string | undefined): Promise<string> {
@@ -484,7 +589,7 @@ export async function buildFolderTree(files = currentFiles()): Promise<FolderNod
       children: [],
     });
     if (!runtimeConfig.hideEmptyFolders) {
-      await addDirectoriesToTree(libraries.get(librarySettings.id)!, librarySettings.path);
+      addCachedDirectoriesToTree(libraries.get(librarySettings.id)!, cachedDirectoriesByLibrary.get(librarySettings.id) ?? new Set());
     }
   }
 
@@ -534,27 +639,71 @@ export async function buildFolderTree(files = currentFiles()): Promise<FolderNod
   return runtimeConfig.hideEmptyFolders ? nodes.filter((node) => node.itemCount > 0) : nodes;
 }
 
-async function addDirectoriesToTree(root: FolderNode, libraryPath: string): Promise<void> {
-  const visit = async (absoluteDir: string, parent: FolderNode, depth: number) => {
-    const entries = await fs.promises.readdir(absoluteDir, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-      const absolutePath = path.join(absoluteDir, entry.name);
-      const relativePath = normalizeSlashes(path.relative(libraryPath, absolutePath));
-      const child: FolderNode = {
-        id: `${root.libraryId}:${relativePath}`,
-        libraryId: root.libraryId,
-        name: entry.name,
-        relativePath,
-        depth,
-        itemCount: 0,
-        children: [],
-      };
-      parent.children.push(child);
-      await visit(absolutePath, child, depth + 1);
-    }
-  };
-  await visit(libraryPath, root, 1);
+function addCachedDirectoriesToTree(root: FolderNode, directories: Set<string>): void {
+  for (const directory of Array.from(directories).sort((a, b) => a.localeCompare(b))) {
+    let cursor = root;
+    const parts = directory.split('/').filter(Boolean);
+    parts.forEach((part, index) => {
+      const relativePath = parts.slice(0, index + 1).join('/');
+      let child = cursor.children.find((node) => node.relativePath === relativePath);
+      if (!child) {
+        child = {
+          id: `${root.libraryId}:${relativePath}`,
+          libraryId: root.libraryId,
+          name: part,
+          relativePath,
+          depth: index + 1,
+          itemCount: 0,
+          children: [],
+        };
+        cursor.children.push(child);
+      }
+      cursor = child;
+    });
+  }
+}
+
+function addCachedDirectory(libraryId: string, folder: string): void {
+  const normalized = normalizeFolderPath(folder);
+  if (!normalized) return;
+  let directories = cachedDirectoriesByLibrary.get(libraryId);
+  if (!directories) {
+    directories = new Set<string>();
+    cachedDirectoriesByLibrary.set(libraryId, directories);
+  }
+  const parts = normalized.split('/');
+  for (let index = 0; index < parts.length; index += 1) {
+    directories.add(parts.slice(0, index + 1).join('/'));
+  }
+}
+
+function replaceCachedItems(items: MediaItem[]): void {
+  if (items.length === 0) return;
+  const replacements = new Map(items.map((item) => [item.id, item]));
+  cachedFiles = [
+    ...cachedFiles.filter((item) => !replacements.has(item.id)),
+    ...items,
+  ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+async function mapWithConcurrency<T, U>(
+  items: T[],
+  concurrency: number,
+  iteratee: (item: T) => Promise<U>,
+): Promise<U[]> {
+  const results: U[] = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await iteratee(items[currentIndex]);
+      }
+    }),
+  );
+  return results;
 }
 
 function filterBlacklisted(files: MediaItem[]): MediaItem[] {
