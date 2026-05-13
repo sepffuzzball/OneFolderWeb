@@ -1725,6 +1725,7 @@ function SlideshowView({
   const [index, setIndex] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const fullscreenEnteredRef = useRef(false);
+  const preloadCacheRef = useRef(new Map<string, HTMLImageElement | HTMLVideoElement>());
   const current = items[index] ?? items[0];
   const next = useCallback(() => setIndex((value) => (items.length === 0 ? 0 : (value + 1) % items.length)), [items.length]);
   const previous = () => setIndex((value) => (items.length === 0 ? 0 : (value - 1 + items.length) % items.length));
@@ -1763,6 +1764,36 @@ function SlideshowView({
   }, [current?.id, next, seconds]);
 
   useEffect(() => {
+    const nearbyItems = nearbySlideshowItems(items, index, 2);
+    const keepIds = new Set(nearbyItems.map((item) => item.id));
+    for (const item of nearbyItems) {
+      if (preloadCacheRef.current.has(item.id)) continue;
+      if (item.kind === 'image') {
+        const image = new Image();
+        image.decoding = 'async';
+        image.src = item.fileUrl;
+        preloadCacheRef.current.set(item.id, image);
+      } else {
+        const video = document.createElement('video');
+        video.preload = 'auto';
+        video.muted = true;
+        video.src = item.fileUrl;
+        video.load();
+        preloadCacheRef.current.set(item.id, video);
+      }
+    }
+    for (const [id, element] of preloadCacheRef.current) {
+      if (keepIds.has(id)) continue;
+      if (element instanceof HTMLVideoElement) {
+        element.pause();
+        element.removeAttribute('src');
+        element.load();
+      }
+      preloadCacheRef.current.delete(id);
+    }
+  }, [index, items]);
+
+  useEffect(() => {
     if (hasMore && !isPrefetching && items.length - index <= 3) void onPrefetch();
   }, [hasMore, index, isPrefetching, items.length, onPrefetch]);
 
@@ -1792,9 +1823,9 @@ function SlideshowView({
       <button className="slideshow-close" onClick={onClose}>x</button>
       <div className="slideshow-stage">
         {current.kind === 'video' ? (
-          <video key={current.id} src={current.fileUrl} autoPlay muted controls onEnded={next} />
+          <video key={current.id} className="slideshow-media" src={current.fileUrl} autoPlay muted controls onEnded={next} />
         ) : (
-          <img key={current.id} src={current.fileUrl} alt={current.name} />
+          <img key={current.id} className="slideshow-media" src={current.fileUrl} alt={current.name} />
         )}
       </div>
       <div className="slideshow-controls">
@@ -2051,6 +2082,17 @@ function clampNumber(value: number, min: number, max: number): number {
 
 function isSlideshowItem(item: MediaItem): boolean {
   return item.kind === 'image' || item.kind === 'video';
+}
+
+function nearbySlideshowItems(items: MediaItem[], index: number, radius: number): MediaItem[] {
+  if (items.length === 0) return [];
+  const safeIndex = clampNumber(index, 0, items.length - 1);
+  const nearby = new Map<string, MediaItem>();
+  for (let offset = -radius; offset <= radius; offset += 1) {
+    const item = items[(safeIndex + offset + items.length) % items.length];
+    if (item) nearby.set(item.id, item);
+  }
+  return Array.from(nearby.values());
 }
 
 function orderItemsByIds(items: MediaItem[], ids: string[]): MediaItem[] {
