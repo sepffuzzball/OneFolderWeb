@@ -8,7 +8,7 @@ import {
   Clipboard,
   Copy,
   Download,
-  File,
+  File as FileIcon,
   FileText,
   FolderPlus,
   Grid2X2,
@@ -349,7 +349,7 @@ export function App() {
     await load();
   };
 
-  const uploadFiles = async (files: FileList | File[]) => {
+  const uploadFiles = useCallback(async (files: FileList | File[], successMessage = 'Upload complete') => {
     const libraryId = folderFilter.libraryId ?? settings?.libraries[0]?.id;
     if (!libraryId || files.length === 0) return;
     const body = new FormData();
@@ -357,9 +357,25 @@ export function App() {
     body.set('targetPath', folderFilter.folder ?? '');
     Array.from(files).forEach((file) => body.append('files', file));
     await api('/api/upload', { method: 'POST', body });
-    notify('Upload complete');
+    notify(successMessage);
     await load();
-  };
+  }, [folderFilter.folder, folderFilter.libraryId, load, notify, settings?.libraries]);
+
+  useEffect(() => {
+    const onPaste = (event: ClipboardEvent) => {
+      if (config?.readOnly) return;
+      const pastedImages = clipboardImageFiles(event.clipboardData);
+      if (pastedImages.length === 0) return;
+      event.preventDefault();
+      const successMessage = pastedImages.length === 1 ? 'Pasted image into folder' : `${pastedImages.length} images pasted into folder`;
+      void uploadFiles(pastedImages, successMessage).catch((error) => {
+        console.error(error);
+        notify('Could not paste image');
+      });
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [config?.readOnly, notify, uploadFiles]);
 
   const moveItems = async (ids: string[], target: { libraryId: string; folder?: string }) => {
     if (ids.length === 0 || config?.readOnly) return;
@@ -1522,7 +1538,7 @@ function MediaThumb({ item, compact = false }: { item: MediaItem; compact?: bool
   if (item.kind === 'image' || item.kind === 'video') {
     return <img src={item.thumbnailUrl} alt={compact ? '' : item.name} loading="lazy" />;
   }
-  const Icon = item.kind === 'text' ? FileText : File;
+  const Icon = item.kind === 'text' ? FileText : FileIcon;
   return (
     <div className={`file-thumb ${compact ? 'compact' : ''}`} aria-label={item.name}>
       <Icon size={compact ? 20 : 42} />
@@ -1876,7 +1892,7 @@ function FilePreview({ item }: { item: MediaItem }) {
     return <MarkdownPreview source={markdownSource} isLoading={isLoadingMarkdown} error={markdownError} />;
   }
 
-  const Icon = item.kind === 'text' ? FileText : File;
+  const Icon = item.kind === 'text' ? FileText : FileIcon;
   return (
     <div className="preview-file">
       <Icon size={56} />
@@ -2372,6 +2388,39 @@ function formatBytes(bytes: number): string {
 
 function hasExternalFiles(dataTransfer: DataTransfer): boolean {
   return dataTransfer.types.includes('Files') && !dataTransfer.types.includes('application/x-onefolder-media');
+}
+
+function clipboardImageFiles(dataTransfer: DataTransfer | null): File[] {
+  if (!dataTransfer) return [];
+  const files = Array.from(dataTransfer.items)
+    .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file));
+  const sourceFiles = files.length > 0 ? files : Array.from(dataTransfer.files).filter((file) => file.type.startsWith('image/'));
+  return sourceFiles.map(normalizeClipboardImageFile);
+}
+
+function normalizeClipboardImageFile(file: File, index: number): File {
+  const name = file.name.trim();
+  if (name && !/^image(?:\.[a-z0-9]+)?$/i.test(name)) return file;
+  return new File([file], clipboardImageFileName(file, index), {
+    type: file.type || 'image/png',
+    lastModified: file.lastModified || Date.now(),
+  });
+}
+
+function clipboardImageFileName(file: File, index: number): string {
+  const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+  const suffix = index === 0 ? '' : `-${index + 1}`;
+  return `clipboard-${stamp}${suffix}.${imageExtensionForType(file.type, file.name)}`;
+}
+
+function imageExtensionForType(type: string, name: string): string {
+  const extension = name.includes('.') ? name.split('.').pop()?.toLowerCase() : undefined;
+  if (extension && /^[a-z0-9]+$/.test(extension)) return extension === 'jpeg' ? 'jpg' : extension;
+  if (type === 'image/jpeg') return 'jpg';
+  if (type === 'image/svg+xml') return 'svg';
+  return type.split('/').at(1)?.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png';
 }
 
 function normalizeTag(value: string): string {
