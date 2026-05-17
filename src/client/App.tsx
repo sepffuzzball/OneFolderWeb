@@ -8,7 +8,7 @@ import {
   Clipboard,
   Copy,
   Download,
-  File,
+  File as FileIcon,
   FileText,
   FolderPlus,
   Grid2X2,
@@ -1538,7 +1538,7 @@ function MediaThumb({ item, compact = false }: { item: MediaItem; compact?: bool
   if (item.kind === 'image' || item.kind === 'video') {
     return <img src={item.thumbnailUrl} alt={compact ? '' : item.name} loading="lazy" />;
   }
-  const Icon = item.kind === 'text' ? FileText : File;
+  const Icon = item.kind === 'text' ? FileText : FileIcon;
   return (
     <div className={`file-thumb ${compact ? 'compact' : ''}`} aria-label={item.name}>
       <Icon size={compact ? 20 : 42} />
@@ -1892,7 +1892,7 @@ function FilePreview({ item }: { item: MediaItem }) {
     return <MarkdownPreview source={markdownSource} isLoading={isLoadingMarkdown} error={markdownError} />;
   }
 
-  const Icon = item.kind === 'text' ? FileText : File;
+  const Icon = item.kind === 'text' ? FileText : FileIcon;
   return (
     <div className="preview-file">
       <Icon size={56} />
