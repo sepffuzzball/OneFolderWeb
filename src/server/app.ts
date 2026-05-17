@@ -295,7 +295,7 @@ export async function createApp(): Promise<express.Express> {
         saved.push(path.basename(finalPath));
         savedPaths.push(finalPath);
       }
-      await addMediaFilesToIndex(libraryId, savedPaths);
+      await addMediaFilesToIndex(libraryId, savedPaths, targetPath);
       res.json({ data: { saved } });
     }),
   );

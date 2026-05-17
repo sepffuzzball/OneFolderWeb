@@ -332,13 +332,28 @@ export async function updateTags(request: { ids: string[]; tags: string[]; mode:
   return currentFiles();
 }
 
-export async function addMediaFilesToIndex(libraryId: string, absolutePaths: string[]): Promise<MediaItem[]> {
+export async function addMediaFilesToIndex(libraryId: string, absolutePaths: string[], targetPath?: string): Promise<MediaItem[]> {
   const settings = await loadSettings();
   const library = settings.libraries.find((item) => item.id === libraryId);
   if (!library) throw new Error('Library not found');
 
+  const previousByKey = new Map(cachedFiles.map((item) => [`${item.libraryId}:${item.relativePath}`, item]));
+  const targetFolder = normalizeFolderPath(targetPath ?? '');
+  if (targetFolder) {
+    const targetDir = path.resolve(library.path, targetFolder);
+    if (!isPathInside(library.path, targetDir)) throw new Error('Upload path escapes the library path');
+
+    const directories = new Set<string>();
+    const indexed = await walkLibrary(library, targetDir, previousByKey, directories);
+    replaceCachedFolder(library.id, targetFolder, indexed);
+    replaceCachedDirectoryTree(library.id, targetFolder, directories);
+    await saveIndex(cachedFiles);
+    scheduleLibraryScan(5_000);
+    return indexed;
+  }
+
   const indexed = (
-    await Promise.all(absolutePaths.map((absolutePath) => buildFastMediaItem(library, absolutePath)))
+    await mapWithConcurrency(absolutePaths, 4, (absolutePath) => buildUploadedMediaItem(library, absolutePath, previousByKey))
   ).filter((item): item is MediaItem => Boolean(item));
   replaceCachedItems(indexed);
   for (const item of indexed) addCachedDirectory(library.id, item.folder);
@@ -347,7 +362,11 @@ export async function addMediaFilesToIndex(libraryId: string, absolutePaths: str
   return indexed;
 }
 
-async function buildFastMediaItem(library: LibrarySettings, absolutePath: string): Promise<MediaItem | undefined> {
+async function buildUploadedMediaItem(
+  library: LibrarySettings,
+  absolutePath: string,
+  previousByKey: Map<string, MediaItem>,
+): Promise<MediaItem | undefined> {
   try {
     const stat = await fs.promises.stat(absolutePath);
     if (!stat.isFile()) return undefined;
@@ -355,32 +374,7 @@ async function buildFastMediaItem(library: LibrarySettings, absolutePath: string
 
     const extension = path.extname(absolutePath).slice(1).toLowerCase();
     if (!isMediaExtension(extension)) return undefined;
-
-    const relativePath = normalizeSlashes(path.relative(library.path, absolutePath));
-    const id = mediaId(library.id, relativePath);
-    const folder = normalizeFolderPath(path.dirname(relativePath));
-    const thumbnailAvailable = canCreateThumbnail(extension) && fs.existsSync(thumbnailPathFor(id, 'grid'));
-    return {
-      id,
-      libraryId: library.id,
-      libraryName: library.name,
-      relativePath,
-      folder,
-      name: path.basename(absolutePath),
-      extension,
-      kind: mediaKindForExtension(extension),
-      mimeType: mime.lookup(extension) || 'application/octet-stream',
-      size: stat.size,
-      createdAt: stat.birthtime.toISOString(),
-      modifiedAt: stat.mtime.toISOString(),
-      indexedAt: new Date().toISOString(),
-      tags: [],
-      description: '',
-      artist: '',
-      thumbnailUrl: thumbnailAvailable ? `/thumb/${id}?size=grid` : `/file/${id}`,
-      previewThumbnailUrl: thumbnailAvailable ? `/thumb/${id}?size=preview` : `/file/${id}`,
-      fileUrl: `/file/${id}`,
-    };
+    return buildMediaItem(library, absolutePath, extension, previousByKey);
   } catch (error) {
     console.warn(`Could not add ${absolutePath} to index:`, error);
     return undefined;
@@ -675,6 +669,33 @@ function addCachedDirectory(libraryId: string, folder: string): void {
   for (let index = 0; index < parts.length; index += 1) {
     directories.add(parts.slice(0, index + 1).join('/'));
   }
+}
+
+function replaceCachedDirectoryTree(libraryId: string, folder: string, refreshedDirectories: Set<string>): void {
+  const normalized = normalizeFolderPath(folder);
+  if (!normalized) return;
+  const existing = cachedDirectoriesByLibrary.get(libraryId) ?? new Set<string>();
+  const next = new Set(
+    Array.from(existing).filter((directory) => !isSameOrChildPath(directory, normalized)),
+  );
+  next.add(normalized);
+  for (const directory of refreshedDirectories) {
+    const cleanDirectory = normalizeFolderPath(directory);
+    if (cleanDirectory) next.add(cleanDirectory);
+  }
+  cachedDirectoriesByLibrary.set(libraryId, next);
+}
+
+function replaceCachedFolder(libraryId: string, folder: string, items: MediaItem[]): void {
+  const normalized = normalizeFolderPath(folder);
+  if (!normalized) {
+    replaceCachedItems(items);
+    return;
+  }
+  cachedFiles = [
+    ...cachedFiles.filter((item) => item.libraryId !== libraryId || !isSameOrChildPath(item.folder, normalized)),
+    ...items,
+  ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 function replaceCachedItems(items: MediaItem[]): void {
