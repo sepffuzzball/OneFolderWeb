@@ -30,8 +30,10 @@ import {
   targetUploadDirectory,
   trashMedia,
   updateTags,
+  cancelScheduledScan,
+  waitForScanIdle,
 } from './scanner.js';
-import { initializePersistenceProvider } from './persistence/factory.js';
+import { initializePersistenceProvider, getPersistenceProvider, closePersistenceProvider } from './persistence/factory.js';
 import { loadSettings, saveSettings, updateSettings, listSavedSearches, getSavedSearch, createSavedSearch, updateSavedSearch, deleteSavedSearch } from './storage.js';
 import type {
   AppSettings,
@@ -83,8 +85,13 @@ export type AppOptions = {
   noAttachScanner?: boolean;
   /** Skip frontend / static middleware */
   noAttachFrontend?: boolean;
-  /** Skip process signal handler registration */
+  /** Skip process signal handler registration (deprecated: no-op) */
   noProcessSignals?: boolean;
+};
+
+export type OneFolderApp = express.Express & {
+  stopBackground(): Promise<void>;
+  shutdown(): Promise<void>;
 };
 
 function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
@@ -101,62 +108,118 @@ function ensureWritable(req: Request, res: Response, next: () => void) {
   next();
 }
 
-export async function createApp(options?: AppOptions): Promise<express.Express> {
+export async function createApp(options?: AppOptions): Promise<OneFolderApp> {
   // Initialize persistence provider early; unsupported PERSISTENCE_DRIVER
   // throws and rejects app startup before listening, even in test-safe mode.
-  initializePersistenceProvider();
+  await initializePersistenceProvider();
 
-  if (!options?.noInitializeIndex) {
-    await initializeIndex();
-  }
-
-  const app = express();
+  const app = express() as OneFolderApp;
   app.use(express.json({ limit: '2mb' }));
 
+  // ---- Provider initialization and lifecycle ----
+
+  // Create one local best-effort cleanup helper available immediately after provider init.
+  // On any failure in any step, it independently attempts scanner stop,
+  // cancelScheduledScan, waitForScanIdle, frontend cleanup if created,
+  // closeMetadataTools, and closePersistenceProvider. Never stops after one
+  // cleanup rejection; continues trying all steps and then rethrows the
+  // original startup error.
+
+  async function immediateCleanup(createdResources: {
+    scannerStop?: () => Promise<void>;
+    frontendCleanup?: () => Promise<void>;
+  }): Promise<void> {
+    // Unconditional attempts — ignore each rejection.
+    if (createdResources.scannerStop) {
+      try { await createdResources.scannerStop(); } catch {}
+    }
+    cancelScheduledScan();
+    try { await waitForScanIdle(); } catch {}
+    if (createdResources.frontendCleanup) {
+      try { await createdResources.frontendCleanup(); } catch {}
+    }
+    try { await closeMetadataTools(); } catch {}
+    try { await closePersistenceProvider(); } catch {}
+  }
+
+  if (!options?.noInitializeIndex) {
+    try {
+      await initializeIndex();
+    } catch (err) {
+      await immediateCleanup({ scannerStop: undefined, frontendCleanup: undefined });
+      throw err;
+    }
+  }
+
+  async function attachScannerIfRequested(): Promise<(() => Promise<void>) | undefined> {
+    if (options?.noAttachScanner) return undefined;
+    return attachScanner();
+  }
+
+  async function attachFrontendIfRequested(): Promise<(() => Promise<void>) | undefined> {
+    if (options?.noAttachFrontend) return undefined;
+    return attachFrontend(app);
+  }
+
+  // ---- Routes (before scanner/frontend attachment) ----
   // Health and readiness probes
   app.get('/healthz', (_req, res) => res.json({ data: { status: 'ok' } }));
 
   app.get('/readyz', asyncHandler(async (_req, res) => {
     const checks: Array<{ name: string; ok: boolean }> = [];
+    // Resolve persistence provider once at route start.
+    const provider = await getPersistenceProvider();
 
-    // Check settings storage
+    // Check settings storage: required for Multer incoming uploads always.
+    const settingsDir = path.join(paths.settingsDir);
     try {
-      const settings = await loadSettings();
-      const settingsDir = path.join(paths.settingsDir);
-      try {
-        await fs.promises.access(settingsDir, fs.constants.R_OK | fs.constants.W_OK);
-        checks.push({ name: 'settings-storage', ok: true });
-      } catch {
-        checks.push({ name: 'settings-storage', ok: false });
-      }
+      await fs.promises.access(settingsDir, fs.constants.R_OK | fs.constants.W_OK);
+      checks.push({ name: 'settings-storage', ok: true });
     } catch {
       checks.push({ name: 'settings-storage', ok: false });
     }
 
-    // Check thumbnail storage
+    // Check thumbnail storage — always required.
+    const thumbDir = path.join(paths.thumbnailDir);
     try {
-      const thumbDir = path.join(paths.thumbnailDir);
       await fs.promises.access(thumbDir, fs.constants.R_OK | fs.constants.W_OK);
       checks.push({ name: 'thumbnails-storage', ok: true });
     } catch {
       checks.push({ name: 'thumbnails-storage', ok: false });
     }
 
-    // Check backup storage when backups are enabled
-    if (runtimeConfig.backupRetentionDays > 0 && runtimeConfig.backupIntervalHours > 0) {
-      try {
-        const backupDir = path.join(paths.backupDir);
-        await fs.promises.access(backupDir, fs.constants.R_OK | fs.constants.W_OK);
-        checks.push({ name: 'backups-storage', ok: true });
-      } catch {
-        checks.push({ name: 'backups-storage', ok: false });
+    // For JSON driver: check backup and postgres are omitted.
+    // For Postgres driver: backup check is omitted, postgres-storage uses
+    // provider.checkReady. settingsDir, thumbnails, libraries, trash remain.
+    if (provider.driver === 'json') {
+      // Check backup storage when backups are enabled.
+      if (runtimeConfig.backupRetentionDays > 0 && runtimeConfig.backupIntervalHours > 0) {
+        try {
+          const backupDir = path.join(paths.backupDir);
+          await fs.promises.access(backupDir, fs.constants.R_OK | fs.constants.W_OK);
+          checks.push({ name: 'backups-storage', ok: true });
+        } catch {
+          checks.push({ name: 'backups-storage', ok: false });
+        }
       }
     }
 
-    // Check enabled libraries
+    if (provider.driver === 'postgres') {
+      try {
+        const pgReady = await provider.checkReady();
+        checks.push({ name: 'postgres-storage', ok: pgReady });
+      } catch {
+        checks.push({ name: 'postgres-storage', ok: false });
+      }
+    }
+
+    // Check enabled libraries — load settings separately from settingsDir
+    // check; do not couple them.
     try {
-      const libraries = (await loadSettings()).libraries;
-      for (const lib of libraries.filter((l) => l.enabled)) {
+      const settings = await loadSettings();
+      // Append settings-data check as ok=true for stable contract
+      checks.push({ name: 'settings-data', ok: true });
+      for (const lib of settings.libraries.filter((l) => l.enabled)) {
         try {
           await fs.promises.access(lib.path, fs.constants.R_OK | (runtimeConfig.readOnly ? 0 : fs.constants.W_OK));
           checks.push({ name: `library-${lib.id}`, ok: true });
@@ -165,7 +228,8 @@ export async function createApp(options?: AppOptions): Promise<express.Express> 
         }
       }
     } catch {
-      // ignore
+      // loadSettings threw; append a stable failed check so readiness is 503
+      checks.push({ name: 'settings-data', ok: false });
     }
 
     // Check trash storage
@@ -585,26 +649,31 @@ export async function createApp(options?: AppOptions): Promise<express.Express> 
     }),
   );
 
-  if (!options?.noAttachFrontend) {
-    await attachFrontend(app);
-  }
-  if (!options?.noAttachScanner) {
-    attachScanner();
-  }
-  if (!options?.noProcessSignals) {
-    process.once('SIGINT', () => void closeMetadataTools().finally(() => process.exit(0)));
-    process.once('SIGTERM', () => void closeMetadataTools().finally(() => process.exit(0)));
+  // ---- Attach scanner and frontend after routes but before error middleware ----
+
+  try {
+    const scannerStop = await attachScannerIfRequested();
+    app.locals.scannerStop = scannerStop;
+  } catch (err) {
+    await immediateCleanup({ frontendCleanup: undefined });
+    throw err;
   }
 
-  // Error middleware (four arguments) after all routes
+  try {
+    const frontendCleanup = await attachFrontendIfRequested();
+    app.locals.frontendCleanup = frontendCleanup;
+  } catch (err) {
+    await immediateCleanup({ scannerStop: app.locals.scannerStop });
+    throw err;
+  }
+
+  // ---- Error middleware (four arguments) after all routes ----
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof SyntaxError && 'body' in err) {
-      // Malformed JSON
       res.status(400).json({ error: 'Malformed JSON in request body.' });
       return;
     }
     if (err instanceof Error && 'type' in err && err.type === 'entity.too.large') {
-      // Payload too large from body-parser
       res.status(413).json({ error: 'Request entity too large.' });
       return;
     }
@@ -613,7 +682,6 @@ export async function createApp(options?: AppOptions): Promise<express.Express> 
         res.status(413).json({ error: err.message });
         return;
       }
-      // Other multer errors
       res.status(400).json({ error: err.message });
       return;
     }
@@ -621,29 +689,128 @@ export async function createApp(options?: AppOptions): Promise<express.Express> 
       res.status(400).json({ error: err.message });
       return;
     }
-    // Otherwise fall through to 500
     console.error(err);
     res.status(500).json({ error: err instanceof Error ? err.message : 'Internal server error' });
   });
 
+  // ---- App lifecycle methods (idempotent) ----
+  // stopBackground and shutdown are memoized and attached to the app.
+
+  let shutdownPromise: Promise<void> | undefined;
+  let stopBackgroundPromise: Promise<void> | undefined;
+
+  // eslint-disable-next-line no-inner-declarations
+  async function memoizedStopBackground(): Promise<void> {
+    if (stopBackgroundPromise) {
+      return stopBackgroundPromise;
+    }
+    stopBackgroundPromise = (async () => {
+      // stopBackground must independently attempt scanner stop and
+      // cancelScheduledScan even if watcher.close() rejects.
+      const scannerStop = app.locals.scannerStop;
+      if (scannerStop) {
+        try { await scannerStop(); } catch {}
+      }
+      cancelScheduledScan();
+    })();
+    return stopBackgroundPromise;
+  }
+
+  // eslint-disable-next-line no-inner-declarations
+  async function memoizedShutdown(): Promise<void> {
+    if (shutdownPromise) {
+      return shutdownPromise;
+    }
+    shutdownPromise = (async () => {
+      // Use Promise.allSettled or sequential independent try/capture so all
+      // cleanup steps are attempted.
+      const errors: unknown[] = [];
+
+      // Stop background first.
+      try { await app.stopBackground(); } catch (e) { errors.push(e); }
+      // Wait for any active scan.
+      try { await waitForScanIdle(); } catch (e) { errors.push(e); }
+      // Attempt Vite cleanup.
+      const frontendCleanup = app.locals.frontendCleanup;
+      if (frontendCleanup) {
+        try { await frontendCleanup(); } catch (e) { errors.push(e); }
+      }
+      // Close metadata tools.
+      try { await closeMetadataTools(); } catch (e) { errors.push(e); }
+      // Close persistence provider.
+      try { await closePersistenceProvider(); } catch (e) { errors.push(e); }
+
+      if (errors.length > 0) {
+        throw new AggregateError(errors, 'One or more shutdown steps failed');
+      }
+    })();
+    return shutdownPromise;
+  }
+
+  app.stopBackground = memoizedStopBackground;
+  app.shutdown = memoizedShutdown;
+
   return app;
 }
 
-async function attachFrontend(app: express.Express): Promise<void> {
-  if (process.env.NODE_ENV !== 'production') {
-    const { createServer } = await import('vite');
-    const vite = await createServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
+/**
+ * Idempotent async trigger-stop function that closes the Chokidar watcher,
+ * clears its retained interval handle, calls scanner cancelScheduledScan
+ * which also clears rescanAfterCurrent, and does not close persistence.
+ * Retain scanner cleanup in the app instance.
+ */
+function attachScanner(): () => Promise<void> {
+  const queueScan = () => {
+    scheduleLibraryScan(2_500);
+  };
+
+  const watcher = chokidar.watch(paths.dataRoot, {
+    ignoreInitial: true,
+    awaitWriteFinish: { stabilityThreshold: 1200, pollInterval: 250 },
+  });
+  watcher.on('add', queueScan).on('change', queueScan).on('unlink', queueScan).on('addDir', queueScan).on('unlinkDir', queueScan);
+
+  const interval = setInterval(() => void scanLibraries().catch(() => { /* ignore scan errors */ }), serverConfig.scanIntervalMs);
+  interval.unref();
+
+  async function stopTrigger() {
+    // Close watcher, but continue cleanup even if it rejects
+    try {
+      await watcher.close();
+    } catch {}
+    // Clear interval.
+    clearInterval(interval);
+    // Cancel scheduled scan and clear rescanAfterCurrent.
+    cancelScheduledScan();
+    // Do NOT close persistence.
     return;
   }
 
-  app.use(express.static(paths.publicDir));
-  app.get(/.*/, (_req, res) => {
-    res.sendFile(path.join(paths.publicDir, 'index.html'));
+  return stopTrigger;
+}
+
+/**
+ * Attach frontend and return an idempotent async cleanup; development Vite
+ * server must be retained and closed.
+ */
+async function attachFrontend(app: express.Express): Promise<() => Promise<void>> {
+  // In production, static cleanup is no-op.
+  if (process.env.NODE_ENV === 'production') {
+    app.use(express.static(paths.publicDir));
+    app.get(/.*/, (_req, res) => res.sendFile(path.join(paths.publicDir, 'index.html')));
+    return () => Promise.resolve();
+  }
+
+  // Dev mode: create and retain Vite server.
+  const { createServer } = await import('vite');
+  const vite = await createServer({
+    server: { middlewareMode: true },
+    appType: 'spa',
   });
+  app.use(vite.middlewares);
+  return async () => {
+    await vite.close();
+  };
 }
 
 function boundedNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -835,19 +1002,6 @@ function streamFileToResponse(filePath: string, res: Response): Promise<void> {
     stream.on('end', resolve);
     stream.pipe(res, { end: false });
   });
-}
-
-function attachScanner() {
-  const queueScan = () => {
-    scheduleLibraryScan(2_500);
-  };
-
-  const watcher = chokidar.watch(paths.dataRoot, {
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 1200, pollInterval: 250 },
-  });
-  watcher.on('add', queueScan).on('change', queueScan).on('unlink', queueScan).on('addDir', queueScan).on('unlinkDir', queueScan);
-  setInterval(() => void scanLibraries(), serverConfig.scanIntervalMs).unref();
 }
 
 function safeFileName(value: string): string {

@@ -14,50 +14,50 @@ import type { MediaIndex } from './persistence/repositories.js';
 
 export type { MediaIndex };
 
-function getProvider(): ReturnType<typeof getPersistenceProvider> {
+async function getProvider(): Promise<Awaited<ReturnType<typeof getPersistenceProvider>>> {
   return getPersistenceProvider();
 }
 
 export async function loadSettings(): Promise<AppSettings> {
-  return getProvider().settings.load();
+  return (await getProvider()).settings.load();
 }
 
 export async function saveSettings(settings: AppSettings): Promise<AppSettings> {
-  return getProvider().settings.save(settings);
+  return (await getProvider()).settings.save(settings);
 }
 
 export async function updateSettings(
   mutator: (current: Readonly<AppSettings>) => AppSettings,
 ): Promise<AppSettings> {
-  return getProvider().settings.update(mutator);
+  return (await getProvider()).settings.update(mutator);
 }
 
 export async function loadIndex(): Promise<MediaIndex> {
-  return getProvider().mediaIndex.load();
+  return (await getProvider()).mediaIndex.load();
 }
 
 export async function saveIndex(files: MediaItem[]): Promise<MediaIndex> {
-  return getProvider().mediaIndex.save(files as readonly MediaItem[]);
+  return (await getProvider()).mediaIndex.save(files as readonly MediaItem[]);
 }
 
 // ---- Saved search facades ---------------------------------------------------
 
 export async function listSavedSearches(): Promise<SavedSearch[]> {
-  return getProvider().savedSearches.list();
+  return (await getProvider()).savedSearches.list();
 }
 
 export async function getSavedSearch(id: string): Promise<SavedSearch | undefined> {
-  return getProvider().savedSearches.get(id);
+  return (await getProvider()).savedSearches.get(id);
 }
 
 export async function createSavedSearch(input: SavedSearchInput): Promise<SavedSearch> {
-  return getProvider().savedSearches.create(input);
+  return (await getProvider()).savedSearches.create(input);
 }
 
 export async function updateSavedSearch(id: string, input: SavedSearchInput): Promise<SavedSearch | undefined> {
-  return getProvider().savedSearches.update(id, input);
+  return (await getProvider()).savedSearches.update(id, input);
 }
 
 export async function deleteSavedSearch(id: string): Promise<boolean> {
-  return getProvider().savedSearches.delete(id);
+  return (await getProvider()).savedSearches.delete(id);
 }

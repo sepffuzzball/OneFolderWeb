@@ -37,7 +37,9 @@ type TagExpressionToken =
 export async function initializeIndex(): Promise<MediaItem[]> {
   const index = await loadIndex();
   cachedFiles = index.files;
-  void scanLibraries();
+  // Background initial scan must have an explicit rejection handler
+  // so it cannot become an unhandled rejection.
+  void scanLibraries().catch(() => { /* ignore scan errors */ });
   return currentFiles();
 }
 
@@ -64,10 +66,35 @@ export function scheduleLibraryScan(delayMs = 1_500): void {
   if (queuedScan) clearTimeout(queuedScan);
   queuedScan = setTimeout(() => {
     queuedScan = undefined;
-    void scanLibraries();
+    void scanLibraries().catch(() => { /* ignore scan errors */ });
   }, delayMs);
   queuedScan.unref?.();
 }
+
+/**
+ * Cancel the scheduled scan (if any). Safe to call even when no scan scheduled.
+ * Always sets `rescanAfterCurrent = false` even if no timer is queued.
+ */
+export function cancelScheduledScan(): void {
+  if (queuedScan) {
+    clearTimeout(queuedScan);
+    queuedScan = undefined;
+  }
+  // Always clear the rescan flag even when no timer is queued.
+  rescanAfterCurrent = false;
+}
+
+/**
+ * Wait for any active scan to complete. Resolves immediately if no scan active.
+ */
+export async function waitForScanIdle(): Promise<void> {
+  if (scanInFlight) {
+    await scanInFlight;
+  }
+}
+
+// Export rescanAfterCurrent for test verification.
+export { rescanAfterCurrent };
 
 export async function refreshTagSettings(): Promise<void> {
   const settings = await loadSettings();

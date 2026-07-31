@@ -191,74 +191,13 @@ async function pruneBackups(prefix: string, retentionDays: number, backupDir: st
 }
 
 // ---- Settings normalization -------------------------------------------------
+// (Re-exported from settings-normalization.ts for reuse)
 
-function normalizeTagAliases(value: unknown): Record<string, string[]> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const aliases: Record<string, string[]> = {};
-  for (const [tag, rawAliases] of Object.entries(value)) {
-    if (!Array.isArray(rawAliases)) continue;
-    const cleanTag = String(tag).trim();
-    const cleanAliases = Array.from(
-      new Set(
-        rawAliases
-          .map(String)
-          .map((alias) => alias.trim())
-          .filter(Boolean),
-      ),
-    ).sort((a, b) => a.localeCompare(b));
-    if (cleanTag && cleanAliases.length > 0) aliases[cleanTag] = cleanAliases;
-  }
-  return aliases;
-}
-
-function normalizeSettingsForLoad(
-  settings: AppSettings,
-  defaultLibraryPath: string,
-): AppSettings {
-  const libraries = settings.libraries;
-  // Only called when libraries is a valid nonempty array
-  return {
-    libraries: libraries.map((library, index) => ({
-      id: library.id || `library-${index + 1}`,
-      name: library.name || `Library ${index + 1}`,
-      path: path.resolve(library.path || defaultLibraryPath),
-      enabled: library.enabled !== false,
-      startExpanded: library.startExpanded !== false,
-    })),
-    tagCatalog: Array.from(
-      new Set((settings.tagCatalog ?? []).map(String).filter(Boolean)),
-    ).sort((a, b) => a.localeCompare(b)),
-    tagAliases: normalizeTagAliases(settings.tagAliases),
-  };
-}
-
-function normalizeSettings(settings: AppSettings): AppSettings {
-  return {
-    libraries: settings.libraries.map((library, index) => ({
-      id: library.id || randomUUID(),
-      name: library.name || `Library ${index + 1}`,
-      path: path.resolve(library.path),
-      enabled: library.enabled !== false,
-      startExpanded: library.startExpanded !== false,
-    })),
-    tagCatalog: Array.from(
-      new Set((settings.tagCatalog ?? []).map(String).filter(Boolean)),
-    ).sort((a, b) => a.localeCompare(b)),
-    tagAliases: normalizeTagAliases(settings.tagAliases),
-  };
-}
-
-// ---- Default settings --------------------------------------------------------
-
-function defaultSettings(): AppSettings {
-  return {
-    libraries: [
-      { id: 'default', name: 'Library', path: paths.dataRoot, enabled: true, startExpanded: true },
-    ],
-    tagCatalog: [],
-    tagAliases: {},
-  };
-}
+import {
+  normalizeSettings,
+  normalizeSettingsForLoad,
+  defaultSettings,
+} from './settings-normalization.js';
 
 // ---- JsonSettingsRepository --------------------------------------------------
 

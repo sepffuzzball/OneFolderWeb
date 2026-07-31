@@ -1,0 +1,33 @@
+# Override to use PostgreSQL instead of JSON persistence.
+# Run with: docker compose -f docker-compose.yml -f docker-compose.postgres.yml up --build
+
+services:
+  onefolder-web:
+    environment:
+      PERSISTENCE_DRIVER: postgres
+      DATABASE_URL: "${DATABASE_URL:?Set DATABASE_URL environment variable to the full Postgres connection URI (including any SSL parameters)}"
+      POSTGRES_POOL_MAX: "${POSTGRES_POOL_MAX:-10}"
+      POSTGRES_IDLE_TIMEOUT_MS: "${POSTGRES_IDLE_TIMEOUT_MS:-10000}"
+      POSTGRES_CONNECTION_TIMEOUT_MS: "${POSTGRES_CONNECTION_TIMEOUT_MS:-5000}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-onefolder}"
+      POSTGRES_USER: "${POSTGRES_USER:-onefolder}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-onefolder} -d ${POSTGRES_DB:-onefolder}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_interval: 10s
+
+volumes:
+  postgres_data:

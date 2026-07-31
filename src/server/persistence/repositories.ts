@@ -39,7 +39,11 @@ export interface SavedSearchRepository {
 export type SavedSearchInput = import('../../shared/types.js').SavedSearchInput;
 
 export interface PersistenceProvider {
+  readonly driver: 'json' | 'postgres';
   settings: SettingsRepository;
   mediaIndex: MediaIndexRepository;
   savedSearches: SavedSearchRepository;
+  initialize(): Promise<void>;
+  close(): Promise<void>;
+  checkReady(): Promise<boolean>;
 }
