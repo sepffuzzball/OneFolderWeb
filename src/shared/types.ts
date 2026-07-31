@@ -107,6 +107,25 @@ export type TagUpdateRequest = {
   description?: string;
 };
 
+export type SavedSearchQuery = {
+  q?: string;
+  tags?: string[];
+  tagExpression?: string;
+  folder?: string;
+  libraryId?: string;
+};
+
+export type SavedSearchInput = {
+  name: string;
+  query: SavedSearchQuery;
+};
+
+export type SavedSearch = SavedSearchInput & {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type CreateFolderRequest = {
   libraryId: string;
   parentPath?: string;

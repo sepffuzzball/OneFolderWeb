@@ -31,7 +31,8 @@ import {
   trashMedia,
   updateTags,
 } from './scanner.js';
-import { loadSettings, saveSettings, updateSettings } from './storage.js';
+import { initializePersistenceProvider } from './persistence/factory.js';
+import { loadSettings, saveSettings, updateSettings, listSavedSearches, getSavedSearch, createSavedSearch, updateSavedSearch, deleteSavedSearch } from './storage.js';
 import type {
   AppSettings,
   CreateFolderRequest,
@@ -40,6 +41,7 @@ import type {
   MediaQuery,
   MoveFolderRequest,
   MoveMediaRequest,
+  SavedSearchInput,
   TagAliasUpdateRequest,
   RenameTagRequest,
   TagCatalogUpdateRequest,
@@ -61,6 +63,7 @@ import {
   validateMediaQuery,
   validateDownloadQuery,
   validateUploadMultipart,
+  validateSavedSearchInput,
 } from './validation.js';
 
 const upload = multer({
@@ -99,6 +102,10 @@ function ensureWritable(req: Request, res: Response, next: () => void) {
 }
 
 export async function createApp(options?: AppOptions): Promise<express.Express> {
+  // Initialize persistence provider early; unsupported PERSISTENCE_DRIVER
+  // throws and rejects app startup before listening, even in test-safe mode.
+  initializePersistenceProvider();
+
   if (!options?.noInitializeIndex) {
     await initializeIndex();
   }
@@ -513,6 +520,68 @@ export async function createApp(options?: AppOptions): Promise<express.Express> 
         return;
       }
       await sendZipDownload(res, files);
+    }),
+  );
+
+  // ---- Saved search routes ---------------------------------------------------
+
+  app.get(
+    '/api/saved-searches',
+    asyncHandler(async (_req, res) => {
+      const data = await listSavedSearches();
+      res.json({ data });
+    }),
+  );
+
+  app.get(
+    '/api/saved-searches/:id',
+    asyncHandler(async (req, res) => {
+      const id = String(req.params.id);
+      const data = await getSavedSearch(id);
+      if (!data) {
+        res.status(404).json({ error: 'Saved search not found' });
+        return;
+      }
+      res.json({ data });
+    }),
+  );
+
+  app.post(
+    '/api/saved-searches',
+    ensureWritable,
+    asyncHandler(async (req, res) => {
+      const input = validateSavedSearchInput(req.body);
+      const data = await createSavedSearch(input);
+      res.status(201).json({ data });
+    }),
+  );
+
+  app.put(
+    '/api/saved-searches/:id',
+    ensureWritable,
+    asyncHandler(async (req, res) => {
+      const input = validateSavedSearchInput(req.body);
+      const id = String(req.params.id);
+      const data = await updateSavedSearch(id, input);
+      if (!data) {
+        res.status(404).json({ error: 'Saved search not found' });
+        return;
+      }
+      res.json({ data });
+    }),
+  );
+
+  app.delete(
+    '/api/saved-searches/:id',
+    ensureWritable,
+    asyncHandler(async (req, res) => {
+      const id = String(req.params.id);
+      const deleted = await deleteSavedSearch(id);
+      if (!deleted) {
+        res.status(404).json({ error: 'Saved search not found' });
+        return;
+      }
+      res.json({ data: { deleted: true } });
     }),
   );
 

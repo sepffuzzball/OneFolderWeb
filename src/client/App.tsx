@@ -24,7 +24,6 @@ import {
   Shield,
   Shuffle,
   SlidersHorizontal,
-  Sparkles,
   Tags,
   Trash2,
   Upload,
@@ -575,7 +574,7 @@ export function App() {
     >
       <aside className="sidebar">
         <div className="brand">
-          {config?.siteImageUrl ? <img src={config.siteImageUrl} alt="" /> : <Sparkles size={22} />}
+          <img src={config?.siteImageUrl || '/onefolder-fox.svg'} alt="" />
           <div>
             <strong>{config?.siteName ?? 'OneFolder Web'}</strong>
             <span>v{config?.version ?? '...'}</span>
@@ -2206,10 +2205,12 @@ function parseDraggedFolder(value: string): DraggedFolder | undefined {
 }
 
 function updateFavicon(siteImageUrl: string) {
-  if (!siteImageUrl) return;
   const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]') ?? document.createElement('link');
+  const href = siteImageUrl || '/onefolder-fox.svg';
   favicon.rel = 'icon';
-  favicon.href = siteImageUrl;
+  favicon.href = href;
+  if (siteImageUrl) favicon.removeAttribute('type');
+  else favicon.type = 'image/svg+xml';
   if (!favicon.parentElement) document.head.appendChild(favicon);
 }
 

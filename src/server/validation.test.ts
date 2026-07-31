@@ -14,6 +14,8 @@ import {
   validateMediaQuery,
   validateDownloadQuery,
   validateUploadMultipart,
+  validateSavedSearchInput,
+  validateSavedSearchQuery,
 } from './validation.js';
 
 describe('validation', () => {
@@ -194,6 +196,99 @@ describe('validation', () => {
     });
     it('rejects non-object', () => {
       expect(() => validateUploadMultipart('str')).toThrow(ValidationError);
+    });
+  });
+
+  describe('validateSavedSearchQuery', () => {
+    it('accepts empty object', () => {
+      expect(() => validateSavedSearchQuery({})).not.toThrow();
+    });
+    it('rejects non-object', () => {
+      expect(() => validateSavedSearchQuery('str')).toThrow(ValidationError);
+    });
+    it('rejects unsafe keys', () => {
+      expect(() => validateSavedSearchQuery({ __proto__: {} })).toThrow(ValidationError);
+    });
+    it('rejects unknown keys', () => {
+      expect(() => validateSavedSearchQuery({ unknown: 'x' })).toThrow(ValidationError);
+    });
+    it('accepts q as string', () => {
+      expect(() => validateSavedSearchQuery({ q: 'hello' })).not.toThrow();
+    });
+    it('accepts tags as string array', () => {
+      expect(() => validateSavedSearchQuery({ tags: ['tag1'] })).not.toThrow();
+    });
+    it('accepts tagExpression as string', () => {
+      expect(() => validateSavedSearchQuery({ tagExpression: 'tag1' })).not.toThrow();
+    });
+    it('rejects both nonempty tags and tagExpression', () => {
+      expect(() => validateSavedSearchQuery({ tags: ['tag1'], tagExpression: 'tag2' })).toThrow(ValidationError);
+    });
+    it('normalizes empty q to undefined', () => {
+      const result = validateSavedSearchQuery({ q: '' });
+      expect(result.q).toBeUndefined();
+    });
+    it('normalizes empty tags to undefined', () => {
+      const result = validateSavedSearchQuery({ tags: [] });
+      expect(result.tags).toBeUndefined();
+    });
+    it('normalizes whitespace tags to undefined', () => {
+      const result = validateSavedSearchQuery({ tags: ['   ', '  '] });
+      expect(result.tags).toBeUndefined();
+    });
+    it('rejects oversized q', () => {
+      expect(() => validateSavedSearchQuery({ q: 'x'.repeat(1001) })).toThrow(ValidationError);
+    });
+    it('rejects oversized folder', () => {
+      expect(() => validateSavedSearchQuery({ folder: 'x'.repeat(1001) })).toThrow(ValidationError);
+    });
+    it('rejects oversized libraryId', () => {
+      expect(() => validateSavedSearchQuery({ libraryId: 'x'.repeat(1001) })).toThrow(ValidationError);
+    });
+    it('rejects oversized tagExpression', () => {
+      expect(() => validateSavedSearchQuery({ tagExpression: 'x'.repeat(4001) })).toThrow(ValidationError);
+    });
+    it('rejects oversized tags count', () => {
+      expect(() => validateSavedSearchQuery({ tags: Array.from({ length: 101 }, (_, i) => `tag${i}`) })).toThrow(ValidationError);
+    });
+    it('rejects oversized tag item', () => {
+      expect(() => validateSavedSearchQuery({ tags: ['x'.repeat(501)] })).toThrow(ValidationError);
+    });
+  });
+
+  describe('validateSavedSearchInput', () => {
+    it('accepts valid input', () => {
+      expect(() => validateSavedSearchInput({ name: 'my search', query: { q: 'hello' } })).not.toThrow();
+    });
+    it('rejects non-object', () => {
+      expect(() => validateSavedSearchInput('str')).toThrow(ValidationError);
+    });
+    it('rejects missing name', () => {
+      expect(() => validateSavedSearchInput({ query: { q: 'hello' } })).toThrow(ValidationError);
+    });
+    it('rejects empty name', () => {
+      expect(() => validateSavedSearchInput({ name: '', query: { q: 'hello' } })).toThrow(ValidationError);
+    });
+    it('rejects whitespace-only name', () => {
+      expect(() => validateSavedSearchInput({ name: '   ', query: { q: 'hello' } })).toThrow(ValidationError);
+    });
+    it('rejects oversized name', () => {
+      expect(() => validateSavedSearchInput({ name: 'x'.repeat(121), query: { q: 'hello' } })).toThrow(ValidationError);
+    });
+    it('rejects missing query', () => {
+      expect(() => validateSavedSearchInput({ name: 'test' })).toThrow(ValidationError);
+    });
+    it('rejects null query', () => {
+      expect(() => validateSavedSearchInput({ name: 'test', query: null })).toThrow(ValidationError);
+    });
+    it('rejects invalid query (non-object)', () => {
+      expect(() => validateSavedSearchInput({ name: 'test', query: 'str' })).toThrow(ValidationError);
+    });
+    it('rejects unsafe keys in input', () => {
+      expect(() => validateSavedSearchInput({ name: 'test', query: { q: 'hello' }, __proto__: {} })).toThrow(ValidationError);
+    });
+    it('rejects unknown top-level keys', () => {
+      expect(() => validateSavedSearchInput({ name: 'test', query: { q: 'hello' }, extra: 'x' })).toThrow(ValidationError);
     });
   });
 });
