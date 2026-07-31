@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import chokidar from 'chokidar';
-import express, { type Request, type Response } from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import mime from 'mime-types';
 import multer from 'multer';
 import { runtimeConfig, paths, serverConfig } from './config.js';
@@ -31,7 +31,7 @@ import {
   trashMedia,
   updateTags,
 } from './scanner.js';
-import { loadSettings, saveSettings } from './storage.js';
+import { loadSettings, saveSettings, updateSettings } from './storage.js';
 import type {
   AppSettings,
   CreateFolderRequest,
@@ -46,6 +46,22 @@ import type {
   TagSummary,
   TagUpdateRequest,
 } from '../shared/types.js';
+import {
+  ValidationError,
+  validateAppSettings,
+  validateTagUpdateRequest,
+  validateTagCatalogUpdateRequest,
+  validateTagAliasUpdateRequest,
+  validateRenameTagRequest,
+  validateCreateFolderRequest,
+  validateMoveMediaRequest,
+  validateMoveFolderRequest,
+  validateDeleteMediaRequest,
+  validateDeleteTagsQuery,
+  validateMediaQuery,
+  validateDownloadQuery,
+  validateUploadMultipart,
+} from './validation.js';
 
 const upload = multer({
   dest: path.join(paths.settingsDir, 'incoming'),
@@ -54,12 +70,23 @@ const upload = multer({
   },
 });
 
+/**
+ * Options for createApp — all default to production behavior.
+ */
+export type AppOptions = {
+  /** Skip index initialization / initial scan */
+  noInitializeIndex?: boolean;
+  /** Skip watcher + interval startup */
+  noAttachScanner?: boolean;
+  /** Skip frontend / static middleware */
+  noAttachFrontend?: boolean;
+  /** Skip process signal handler registration */
+  noProcessSignals?: boolean;
+};
+
 function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
-  return (req: Request, res: Response) => {
-    fn(req, res).catch((error) => {
-      console.error(error);
-      res.status(500).json({ error: error instanceof Error ? error.message : 'Internal server error' });
-    });
+  return (req: Request, res: Response, next: NextFunction) => {
+    fn(req, res).catch(next);
   };
 }
 
@@ -71,11 +98,83 @@ function ensureWritable(req: Request, res: Response, next: () => void) {
   next();
 }
 
-export async function createApp(): Promise<express.Express> {
-  await initializeIndex();
+export async function createApp(options?: AppOptions): Promise<express.Express> {
+  if (!options?.noInitializeIndex) {
+    await initializeIndex();
+  }
 
   const app = express();
   app.use(express.json({ limit: '2mb' }));
+
+  // Health and readiness probes
+  app.get('/healthz', (_req, res) => res.json({ data: { status: 'ok' } }));
+
+  app.get('/readyz', asyncHandler(async (_req, res) => {
+    const checks: Array<{ name: string; ok: boolean }> = [];
+
+    // Check settings storage
+    try {
+      const settings = await loadSettings();
+      const settingsDir = path.join(paths.settingsDir);
+      try {
+        await fs.promises.access(settingsDir, fs.constants.R_OK | fs.constants.W_OK);
+        checks.push({ name: 'settings-storage', ok: true });
+      } catch {
+        checks.push({ name: 'settings-storage', ok: false });
+      }
+    } catch {
+      checks.push({ name: 'settings-storage', ok: false });
+    }
+
+    // Check thumbnail storage
+    try {
+      const thumbDir = path.join(paths.thumbnailDir);
+      await fs.promises.access(thumbDir, fs.constants.R_OK | fs.constants.W_OK);
+      checks.push({ name: 'thumbnails-storage', ok: true });
+    } catch {
+      checks.push({ name: 'thumbnails-storage', ok: false });
+    }
+
+    // Check backup storage when backups are enabled
+    if (runtimeConfig.backupRetentionDays > 0 && runtimeConfig.backupIntervalHours > 0) {
+      try {
+        const backupDir = path.join(paths.backupDir);
+        await fs.promises.access(backupDir, fs.constants.R_OK | fs.constants.W_OK);
+        checks.push({ name: 'backups-storage', ok: true });
+      } catch {
+        checks.push({ name: 'backups-storage', ok: false });
+      }
+    }
+
+    // Check enabled libraries
+    try {
+      const libraries = (await loadSettings()).libraries;
+      for (const lib of libraries.filter((l) => l.enabled)) {
+        try {
+          await fs.promises.access(lib.path, fs.constants.R_OK | (runtimeConfig.readOnly ? 0 : fs.constants.W_OK));
+          checks.push({ name: `library-${lib.id}`, ok: true });
+        } catch {
+          checks.push({ name: `library-${lib.id}`, ok: false });
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // Check trash storage
+    if (!runtimeConfig.readOnly) {
+      try {
+        const trashDir = path.join(paths.trashDir);
+        await fs.promises.access(trashDir, fs.constants.W_OK);
+        checks.push({ name: 'trash-storage', ok: true });
+      } catch {
+        checks.push({ name: 'trash-storage', ok: false });
+      }
+    }
+
+    const allOk = checks.every((c) => c.ok);
+    res.status(allOk ? 200 : 503).json({ data: { status: allOk ? 'ready' : 'not_ready', checks } });
+  }));
 
   app.get('/api/config', (_req, res) => res.json({ data: runtimeConfig }));
 
@@ -92,7 +191,7 @@ export async function createApp(): Promise<express.Express> {
     '/api/settings',
     ensureWritable,
     asyncHandler(async (req, res) => {
-      const settings = req.body as AppSettings;
+      const settings = validateAppSettings(req.body);
       const next = await saveSettings(settings);
       await refreshTagSettings();
       res.json({ data: next });
@@ -108,16 +207,17 @@ export async function createApp(): Promise<express.Express> {
   );
 
   app.get('/api/media', (req, res) => {
-    const tagExpression = typeof req.query.tags === 'string' ? req.query.tags : undefined;
+    const validated = validateMediaQuery(req.query);
+    const tagExpression = validated.tagExpression;
     const tags = tagExpression && !hasTagExpressionOperators(tagExpression) ? tagExpression.split(',').filter(Boolean) : [];
     const offset = boundedNumber(req.query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
     const limit = boundedNumber(req.query.limit, 240, 1, 1000);
     const query: MediaQuery = {
-      q: typeof req.query.q === 'string' ? req.query.q : undefined,
+      q: validated.q,
       tags,
       tagExpression,
-      folder: typeof req.query.folder === 'string' ? req.query.folder : undefined,
-      libraryId: typeof req.query.libraryId === 'string' ? req.query.libraryId : undefined,
+      folder: validated.folder,
+      libraryId: validated.libraryId,
     };
     const filtered = filterMedia(query);
     const items = filtered.slice(offset, offset + limit);
@@ -152,11 +252,7 @@ export async function createApp(): Promise<express.Express> {
     '/api/tags',
     ensureWritable,
     asyncHandler(async (req, res) => {
-      const payload = req.body as TagUpdateRequest;
-      if (!Array.isArray(payload.ids) || payload.ids.length === 0) {
-        res.status(400).json({ error: 'At least one media item is required.' });
-        return;
-      }
+      const payload = validateTagUpdateRequest(req.body);
       res.json({ data: await updateTags(payload) });
     }),
   );
@@ -180,14 +276,17 @@ export async function createApp(): Promise<express.Express> {
     '/api/tags/catalog',
     ensureWritable,
     asyncHandler(async (req, res) => {
-      const payload = req.body as TagCatalogUpdateRequest;
-      const settings = await loadSettings();
-      const next = await saveSettings({
-        ...settings,
-        tagCatalog: Array.from(new Set(payload.tags.map((tag) => resolveTagAliasFromMap(tag, settings.tagAliases)).filter(Boolean))).sort((a, b) =>
-          a.localeCompare(b),
-        ),
-      });
+      const payload = validateTagCatalogUpdateRequest(req.body);
+      const next = await updateSettings((current) => ({
+        ...current,
+        tagCatalog: Array.from(
+          new Set(
+            payload.tags.map((tag) =>
+              resolveTagAliasFromMap(tag, current.tagAliases),
+            ).filter(Boolean),
+          ),
+        ).sort((a, b) => a.localeCompare(b)),
+      }));
       await refreshTagSettings();
       res.json({ data: next.tagCatalog });
     }),
@@ -197,26 +296,38 @@ export async function createApp(): Promise<express.Express> {
     '/api/tags/aliases',
     ensureWritable,
     asyncHandler(async (req, res) => {
-      const payload = req.body as TagAliasUpdateRequest;
-      const settings = await loadSettings();
+      const payload = validateTagAliasUpdateRequest(req.body);
       const tag = normalizeTag(payload.tag);
       if (!tag) {
         res.status(400).json({ error: 'Tag is required.' });
         return;
       }
       const aliases = Array.from(
-        new Set((payload.aliases ?? []).map(normalizeTag).filter((alias) => alias && alias !== tag)),
+        new Set(
+          (payload.aliases ?? [])
+            .map(normalizeTag)
+            .filter((alias) => alias && alias !== tag),
+        ),
       ).sort((a, b) => a.localeCompare(b));
-      const nextAliases = { ...settings.tagAliases };
-      for (const [existingTag, existingAliases] of Object.entries(nextAliases)) {
-        const normalizedExisting = normalizeTag(existingTag);
-        if (normalizedExisting === tag) continue;
-        nextAliases[existingTag] = existingAliases.filter((alias) => !aliases.includes(normalizeTag(alias)) && normalizeTag(alias) !== tag);
-        if (nextAliases[existingTag].length === 0) delete nextAliases[existingTag];
-      }
-      if (aliases.length > 0) nextAliases[tag] = aliases;
-      else delete nextAliases[tag];
-      const next = await saveSettings({ ...settings, tagAliases: nextAliases });
+      const next = await updateSettings((current) => {
+        const nextAliases = { ...current.tagAliases };
+        for (const [existingTag, existingAliases] of Object.entries(nextAliases)) {
+          const normalizedExisting = normalizeTag(existingTag);
+          if (normalizedExisting === tag) continue;
+          nextAliases[existingTag] = existingAliases.filter(
+            (alias) =>
+              !aliases.includes(normalizeTag(alias)) &&
+              normalizeTag(alias) !== tag,
+          );
+          if (nextAliases[existingTag].length === 0) delete nextAliases[existingTag];
+        }
+        if (aliases.length > 0) nextAliases[tag] = aliases;
+        else delete nextAliases[tag];
+        return {
+          ...current,
+          tagAliases: nextAliases,
+        };
+      });
       await refreshTagSettings();
       res.json({ data: next.tagAliases });
     }),
@@ -226,23 +337,25 @@ export async function createApp(): Promise<express.Express> {
     '/api/tags/rename',
     ensureWritable,
     asyncHandler(async (req, res) => {
-      const payload = req.body as RenameTagRequest;
-      const settings = await loadSettings();
+      const payload = validateRenameTagRequest(req.body);
       const from = normalizeTag(payload.from);
       const to = normalizeTag(payload.to);
+      // Complete renameTagEverywhere (scanner/filesystem work) before
+      // calling updateSettings, which is a pure synchronous transform.
       const renamed = await renameTagEverywhere(from, to);
-      await saveSettings({
-        ...settings,
-        tagCatalog: settings.tagCatalog
+      await updateSettings((current) => ({
+        ...current,
+        tagCatalog: current.tagCatalog
           .map((tag) => {
             const normalized = normalizeTag(tag);
             if (normalized.toLowerCase() === from.toLowerCase()) return to;
-            if (normalized.toLowerCase().startsWith(`${from.toLowerCase()}/`)) return `${to}${normalized.slice(from.length)}`;
+            if (normalized.toLowerCase().startsWith(`${from.toLowerCase()}/`))
+              return `${to}${normalized.slice(from.length)}`;
             return normalized;
           })
           .filter(Boolean),
-        tagAliases: renameTagAliases(settings.tagAliases, from, to),
-      });
+        tagAliases: renameTagAliases(current.tagAliases, from, to),
+      }));
       res.json({ data: renamed });
     }),
   );
@@ -251,18 +364,20 @@ export async function createApp(): Promise<express.Express> {
     '/api/tags',
     ensureWritable,
     asyncHandler(async (req, res) => {
-      const tag = normalizeTag(String(req.query.tag ?? ''));
-      const settings = await loadSettings();
-      const removed = await removeTagEverywhere(tag);
-      await saveSettings({
-        ...settings,
-        tagCatalog: settings.tagCatalog.filter((catalogTag) => {
+      const tag = validateDeleteTagsQuery(req.query.tag);
+      const normalizedTag = normalizeTag(tag.tag);
+      // Complete removeTagEverywhere (scanner/filesystem work) before
+      // calling updateSettings, which is a pure synchronous transform.
+      const removed = await removeTagEverywhere(normalizedTag);
+      await updateSettings((current) => ({
+        ...current,
+        tagCatalog: current.tagCatalog.filter((catalogTag) => {
           const normalized = normalizeTag(catalogTag).toLowerCase();
-          const target = tag.toLowerCase();
+          const target = normalizedTag.toLowerCase();
           return normalized !== target && !normalized.startsWith(`${target}/`);
         }),
-        tagAliases: removeTagAliases(settings.tagAliases, tag),
-      });
+        tagAliases: removeTagAliases(current.tagAliases, normalizedTag),
+      }));
       res.json({ data: removed });
     }),
   );
@@ -271,7 +386,7 @@ export async function createApp(): Promise<express.Express> {
     '/api/folders',
     ensureWritable,
     asyncHandler(async (req, res) => {
-      const payload = req.body as CreateFolderRequest;
+      const payload = validateCreateFolderRequest(req.body);
       const relativePath = await createFolder(payload.libraryId, payload.parentPath, payload.name);
       res.json({ data: { relativePath } });
     }),
@@ -282,21 +397,34 @@ export async function createApp(): Promise<express.Express> {
     ensureWritable,
     upload.array('files', 250),
     asyncHandler(async (req, res) => {
-      const files = (req.files ?? []) as Express.Multer.File[];
-      const libraryId = String(req.body.libraryId ?? '');
-      const targetPath = req.body.targetPath ? String(req.body.targetPath) : undefined;
-      const targetDir = await targetUploadDirectory(libraryId, targetPath);
-      const saved: string[] = [];
-      const savedPaths: string[] = [];
-      for (const file of files) {
-        const filename = safeFileName(file.originalname);
-        const finalPath = await uniquePath(path.join(targetDir, filename));
-        await moveUploadedFile(file.path, finalPath);
-        saved.push(path.basename(finalPath));
-        savedPaths.push(finalPath);
+      try {
+        const uploadBody = validateUploadMultipart(req.body);
+        const files = (req.files ?? []) as Express.Multer.File[];
+        const libraryId = uploadBody.libraryId;
+        const targetPath = uploadBody.targetPath;
+        const targetDir = await targetUploadDirectory(libraryId, targetPath);
+        const saved: string[] = [];
+        const savedPaths: string[] = [];
+        for (const file of files) {
+          const filename = safeFileName(file.originalname);
+          const finalPath = await uniquePath(path.join(targetDir, filename));
+          await moveUploadedFile(file.path, finalPath);
+          saved.push(path.basename(finalPath));
+          savedPaths.push(finalPath);
+        }
+        await addMediaFilesToIndex(libraryId, savedPaths, targetPath);
+        res.json({ data: { saved } });
+      } catch (error) {
+        // Clean up temp files created by multer before propagating
+        for (const tempFile of (req.files ?? []) as Express.Multer.File[]) {
+          try {
+            await fs.promises.rm(tempFile.path, { force: true });
+          } catch {
+            // ignore cleanup errors
+          }
+        }
+        throw error; // let asyncHandler and error middleware handle it
       }
-      await addMediaFilesToIndex(libraryId, savedPaths, targetPath);
-      res.json({ data: { saved } });
     }),
   );
 
@@ -304,11 +432,7 @@ export async function createApp(): Promise<express.Express> {
     '/api/move',
     ensureWritable,
     asyncHandler(async (req, res) => {
-      const payload = req.body as MoveMediaRequest;
-      if (!Array.isArray(payload.ids) || payload.ids.length === 0) {
-        res.status(400).json({ error: 'At least one media item is required.' });
-        return;
-      }
+      const payload = validateMoveMediaRequest(req.body);
       res.json({ data: await moveMedia(payload) });
     }),
   );
@@ -317,11 +441,7 @@ export async function createApp(): Promise<express.Express> {
     '/api/folders/move',
     ensureWritable,
     asyncHandler(async (req, res) => {
-      const payload = req.body as MoveFolderRequest;
-      if (!payload.libraryId || !payload.sourcePath || !payload.targetLibraryId) {
-        res.status(400).json({ error: 'Source and target folders are required.' });
-        return;
-      }
+      const payload = validateMoveFolderRequest(req.body);
       res.json({ data: await moveFolder(payload) });
     }),
   );
@@ -330,11 +450,7 @@ export async function createApp(): Promise<express.Express> {
     '/api/delete',
     ensureWritable,
     asyncHandler(async (req, res) => {
-      const payload = req.body as DeleteMediaRequest;
-      if (!Array.isArray(payload.ids) || payload.ids.length === 0) {
-        res.status(400).json({ error: 'At least one media item is required.' });
-        return;
-      }
+      const payload = validateDeleteMediaRequest(req.body);
       res.json({ data: await trashMedia(payload) });
     }),
   );
@@ -380,7 +496,8 @@ export async function createApp(): Promise<express.Express> {
   app.get(
     '/api/download',
     asyncHandler(async (req, res) => {
-      const ids = typeof req.query.ids === 'string' ? req.query.ids.split(',').filter(Boolean) : [];
+      const downloadQuery = validateDownloadQuery(req.query.ids);
+      const ids = downloadQuery.ids;
       const files: Array<{ item: MediaItem; filePath: string }> = [];
       for (const id of ids) {
         const item = findMedia(id);
@@ -399,11 +516,46 @@ export async function createApp(): Promise<express.Express> {
     }),
   );
 
-  await attachFrontend(app);
-  attachScanner();
+  if (!options?.noAttachFrontend) {
+    await attachFrontend(app);
+  }
+  if (!options?.noAttachScanner) {
+    attachScanner();
+  }
+  if (!options?.noProcessSignals) {
+    process.once('SIGINT', () => void closeMetadataTools().finally(() => process.exit(0)));
+    process.once('SIGTERM', () => void closeMetadataTools().finally(() => process.exit(0)));
+  }
 
-  process.once('SIGINT', () => void closeMetadataTools().finally(() => process.exit(0)));
-  process.once('SIGTERM', () => void closeMetadataTools().finally(() => process.exit(0)));
+  // Error middleware (four arguments) after all routes
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof SyntaxError && 'body' in err) {
+      // Malformed JSON
+      res.status(400).json({ error: 'Malformed JSON in request body.' });
+      return;
+    }
+    if (err instanceof Error && 'type' in err && err.type === 'entity.too.large') {
+      // Payload too large from body-parser
+      res.status(413).json({ error: 'Request entity too large.' });
+      return;
+    }
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE' || err.code === 'LIMIT_PART_COUNT') {
+        res.status(413).json({ error: err.message });
+        return;
+      }
+      // Other multer errors
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    if (err instanceof ValidationError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    // Otherwise fall through to 500
+    console.error(err);
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Internal server error' });
+  });
 
   return app;
 }
