@@ -8,7 +8,7 @@
  * per-key shared serial executor queue.
  */
 
-import type { AppSettings, MediaItem } from '../../shared/types.js';
+import type { AppSettings, MediaItem, SavedSearch } from '../../shared/types.js';
 
 /** Exact on-disk shape for the media index. */
 export type MediaIndex = {
@@ -26,4 +26,20 @@ export interface SettingsRepository {
 export interface MediaIndexRepository {
   load(): Promise<MediaIndex>;
   save(files: readonly MediaItem[]): Promise<MediaIndex>;
+}
+
+export interface SavedSearchRepository {
+  list(): Promise<SavedSearch[]>;
+  get(id: string): Promise<SavedSearch | undefined>;
+  create(input: SavedSearchInput): Promise<SavedSearch>;
+  update(id: string, input: SavedSearchInput): Promise<SavedSearch | undefined>;
+  delete(id: string): Promise<boolean>;
+}
+
+export type SavedSearchInput = import('../../shared/types.js').SavedSearchInput;
+
+export interface PersistenceProvider {
+  settings: SettingsRepository;
+  mediaIndex: MediaIndexRepository;
+  savedSearches: SavedSearchRepository;
 }

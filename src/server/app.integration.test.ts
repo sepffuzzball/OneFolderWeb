@@ -18,6 +18,7 @@ const originalEnv = {
   THUMBNAIL_DIR: process.env.THUMBNAIL_DIR,
   BACKUP_DIR: process.env.BACKUP_DIR,
   TRASH_DIR: process.env.TRASH_DIR,
+  PERSISTENCE_DRIVER: process.env.PERSISTENCE_DRIVER,
 };
 
 let app: express.Express;
@@ -245,6 +246,144 @@ describe('health checks work in test mode', () => {
     const body = await res.json();
     expect(body.data.checks.some((c: { name: string }) => c.name === 'settings-storage')).toBe(true);
     expect(body.data.checks.some((c: { name: string }) => c.name === 'thumbnails-storage')).toBe(true);
+  });
+});
+
+describe('saved search CRUD', () => {
+  it('GET /api/saved-searches returns empty array', async () => {
+    const res = await fetchUrl('/api/saved-searches');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ data: [] });
+  });
+
+  it('POST /api/saved-searches creates a saved search', async () => {
+    const res = await fetchUrl('/api/saved-searches', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'test', query: { q: 'hello' } }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.data).toBeDefined();
+    expect(body.data.id).toBeDefined();
+    expect(body.data.name).toBe('test');
+    expect(body.data.query.q).toBe('hello');
+  });
+
+  it('GET /api/saved-searches/:id returns 404 for unknown', async () => {
+    const res = await fetchUrl('/api/saved-searches/unknown');
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ error: 'Saved search not found' });
+  });
+
+  it('POST /api/saved-searches with invalid body returns 400', async () => {
+    const res = await fetchUrl('/api/saved-searches', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: { q: 'test' } }), // missing name
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/saved-searches requires writable', async () => {
+    // Temporarily set readOnly to true to test ensureWritable
+    const { runtimeConfig } = await import('./config.js');
+    const originalReadOnly = runtimeConfig.readOnly;
+    runtimeConfig.readOnly = true;
+    try {
+      const res = await fetchUrl('/api/saved-searches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'test', query: { q: 'hello' } }),
+      });
+      expect(res.status).toBe(403);
+    } finally {
+      runtimeConfig.readOnly = originalReadOnly;
+    }
+  });
+
+  it('PUT /api/saved-searches/:id updates a saved search', async () => {
+    // Create first
+    const createRes = await fetchUrl('/api/saved-searches', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'update me', query: { q: 'initial' } }),
+    });
+    const created = (await createRes.json()).data;
+    expect(created.id).toBeDefined();
+
+    // Now update
+    const updateRes = await fetchUrl(`/api/saved-searches/${created.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'updated', query: { q: 'changed' } }),
+    });
+    expect(updateRes.status).toBe(200);
+    const updated = (await updateRes.json()).data;
+    expect(updated.name).toBe('updated');
+    expect(updated.query.q).toBe('changed');
+    // id and createdAt should be preserved
+    expect(updated.id).toBe(created.id);
+    expect(updated.createdAt).toBe(created.createdAt);
+  });
+
+  it('PUT /api/saved-searches/:id returns 404 for unknown', async () => {
+    const res = await fetchUrl('/api/saved-searches/unknown', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'test', query: { q: 'hello' } }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('DELETE /api/saved-searches/:id deletes a saved search', async () => {
+    // Create first
+    const createRes = await fetchUrl('/api/saved-searches', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'delete me', query: { q: 'hello' } }),
+    });
+    const created = (await createRes.json()).data;
+    expect(created.id).toBeDefined();
+
+    // Delete
+    const deleteRes = await fetchUrl(`/api/saved-searches/${created.id}`, {
+      method: 'DELETE',
+    });
+    expect(deleteRes.status).toBe(200);
+    expect(await deleteRes.json()).toMatchObject({ data: { deleted: true } });
+
+    // Verify it's gone
+    const getRes = await fetchUrl(`/api/saved-searches/${created.id}`);
+    expect(getRes.status).toBe(404);
+  });
+
+  it('DELETE /api/saved-searches/:id returns 404 for unknown', async () => {
+    const res = await fetchUrl('/api/saved-searches/unknown', {
+      method: 'DELETE',
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('startup rejects unsupported PERSISTENCE_DRIVER', () => {
+  it('createApp with all side effects disabled rejects unsupported PERSISTENCE_DRIVER', async () => {
+    const originalDriver = process.env.PERSISTENCE_DRIVER;
+    process.env.PERSISTENCE_DRIVER = 'postgres';
+    try {
+      const { createApp } = await import('./app.js');
+      await expect(
+        createApp({
+          noInitializeIndex: true,
+          noAttachScanner: true,
+          noAttachFrontend: true,
+          noProcessSignals: true,
+        }),
+      ).rejects.toThrow('Unsupported persistence driver');
+    } finally {
+      if (originalDriver === undefined) delete process.env.PERSISTENCE_DRIVER;
+      else process.env.PERSISTENCE_DRIVER = originalDriver;
+    }
   });
 });
 

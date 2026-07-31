@@ -6,6 +6,8 @@ import type {
   MediaQuery,
   MoveFolderRequest,
   MoveMediaRequest,
+  SavedSearchInput,
+  SavedSearchQuery,
   TagAliasUpdateRequest,
   RenameTagRequest,
   TagCatalogUpdateRequest,
@@ -303,4 +305,91 @@ export function validateUploadMultipart(input: unknown): { libraryId: string; ta
   const targetPath = input.targetPath;
   if (targetPath !== undefined && !isString(targetPath)) throw new ValidationError('targetPath must be a string if present');
   return { libraryId: String(libraryId), targetPath: targetPath ? String(targetPath) : undefined };
+}
+
+// ---- Saved search validators -------------------------------------------------
+
+function normalizeEmptyString(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isString(value)) throw new ValidationError('value must be a string');
+  const trimmed = String(value).trim();
+  return trimmed || undefined;
+}
+
+function normalizeEmptyArray(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new ValidationError('value must be an array of strings');
+  // Assert every element is a string before any normalization.
+  for (const item of value) {
+    if (typeof item !== 'string') throw new ValidationError('value items must be strings');
+  }
+  const items = value.map(String).map((s) => s.trim()).filter(Boolean);
+  return items.length > 0 ? items : undefined;
+}
+
+function validateMaxLength(value: string, max: number, label: string): void {
+  if (value.length > max) throw new ValidationError(`${label} must be at most ${max} characters`);
+}
+
+function validateArrayMaxLength(items: string[], max: number, label: string): void {
+  if (items.length > max) throw new ValidationError(`${label} must have at most ${max} entries`);
+}
+
+export function validateSavedSearchQuery(input: unknown): SavedSearchQuery {
+  if (!isPlainObject(input)) throw new ValidationError('SavedSearchQuery must be a non-null non-array object');
+  rejectUnsafeKeys(input);
+
+  // Known query keys
+  const allowedKeys = new Set(['q', 'tags', 'tagExpression', 'folder', 'libraryId']);
+  for (const key of Object.keys(input)) {
+    if (!allowedKeys.has(key)) throw new ValidationError(`Unknown query key: ${key}`);
+  }
+
+  const q = normalizeEmptyString(input.q);
+  const tags = normalizeEmptyArray(input.tags);
+  const tagExpression = normalizeEmptyString(input.tagExpression);
+  const folder = normalizeEmptyString(input.folder);
+  const libraryId = normalizeEmptyString(input.libraryId);
+
+  // Reject both nonempty tags and nonempty tagExpression
+  if (tags && tags.length > 0 && tagExpression) {
+    throw new ValidationError('Cannot provide both tags and tagExpression');
+  }
+
+  // Max lengths
+  if (q) validateMaxLength(q, 1000, 'q');
+  if (folder) validateMaxLength(folder, 1000, 'folder');
+  if (libraryId) validateMaxLength(libraryId, 1000, 'libraryId');
+  if (tagExpression) validateMaxLength(tagExpression, 4000, 'tagExpression');
+  if (tags) {
+    validateArrayMaxLength(tags, 100, 'tags');
+    for (const tag of tags) {
+      validateMaxLength(tag, 500, 'tag');
+    }
+  }
+
+  return { q, tags, tagExpression, folder, libraryId };
+}
+
+export function validateSavedSearchInput(input: unknown): SavedSearchInput {
+  if (!isPlainObject(input)) throw new ValidationError('SavedSearchInput must be a non-null non-array object');
+  rejectUnsafeKeys(input);
+
+  // Reject unknown top-level keys (only name and query are allowed).
+  const allowedKeys = new Set(['name', 'query']);
+  for (const key of Object.keys(input)) {
+    if (!allowedKeys.has(key)) throw new ValidationError(`Unknown saved-search input key: "${key}"`);
+  }
+
+  const name = input.name;
+  if (!isString(name)) throw new ValidationError('name must be a string');
+  const trimmedName = String(name).trim();
+  if (!trimmedName) throw new ValidationError('name is required');
+  validateMaxLength(trimmedName, 120, 'name');
+
+  const query = input.query;
+  if (query === undefined || query === null) throw new ValidationError('query is required');
+  const validatedQuery = validateSavedSearchQuery(query);
+
+  return { name: trimmedName, query: validatedQuery };
 }

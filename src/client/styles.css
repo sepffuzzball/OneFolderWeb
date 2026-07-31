@@ -110,10 +110,12 @@ textarea {
 }
 
 .brand img {
+  display: block;
+  flex: 0 0 28px;
   width: 28px;
   height: 28px;
   border-radius: 6px;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .readonly {
