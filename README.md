@@ -52,6 +52,104 @@ Environment variables:
 - `SCAN_INTERVAL_MS=15000`: periodic filesystem scan interval.
 - `TRASH_DIR=/data/trash`: where soft-deleted files are moved.
 
+### Persistence
+
+OneFolder Web uses a pluggable persistence driver. By default, all settings, saved searches, and the media index are stored in JSON files under `/data/settings`. You can switch to PostgreSQL by adding the Postgres Compose override.
+
+Environment variables:
+
+- `PERSISTENCE_DRIVER=json` (default) or `postgres`. The JSON driver stores data in `/data/settings`.
+- `DATABASE_URL`: required only when `PERSISTENCE_DRIVER=postgres`. The full Postgres connection URI, including any SSL parameters such as `sslmode=require`. Never log, share, or commit this value.
+- `POSTGRES_POOL_MAX=10` (default 10, range 1..100): maximum pool connections.
+- `POSTGRES_IDLE_TIMEOUT_MS=10000` (default 10000ms, range 0..3600000): pool idle timeout.
+- `POSTGRES_CONNECTION_TIMEOUT_MS=5000` (default 5000ms, range 1..3600000): connection timeout.
+
+Migrations run automatically under an advisory lock on Postgres startup. With the JSON driver, no database connection is attempted.
+
+Media files (original images, videos, thumbnails) remain in filesystem/network storage. Postgres stores only settings, saved searches, and the derived media index. One app instance is recommended because scanning and filesystem operations are not distributed.
+
+### PostgreSQL Deployment
+
+To run with Postgres instead of JSON, use the provided override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up --build
+```
+
+Set a strong production password. The raw password can be set as an environment variable or in a `.env` file. The `DATABASE_URL` must URL-encode the password if it contains special characters (e.g. `@`, `:`, `%`). Use `encodeURIComponent()` or a similar function.
+
+For local non-TLS deployments (the default), use `sslmode=disable`:
+```bash
+export POSTGRES_PASSWORD='yourstrongpassword'
+export DATABASE_URL='postgresql://onefolder:yoururlencodedpassword@postgres/onefolder?sslmode=disable'
+```
+
+For TLS-enabled external Postgres, use `sslmode=require`:
+```bash
+export POSTGRES_PASSWORD='yourstrongpassword'
+export DATABASE_URL='postgresql://onefolder:yoururlencodedpassword@postgres/onefolder?sslmode=require'
+```
+
+The password in `POSTGRES_PASSWORD` is the raw value; the password in `DATABASE_URL` must be URL-encoded (percent-encoded) if it contains special characters. For example, a password with `@` becomes `%40` in the URI.
+
+#### Migration Runbook
+
+To migrate existing JSON data to Postgres:
+
+1. Back up your settings/media/thumbnails/trash directories.
+2. Stop the app: `docker compose down`.
+3. Start only the Postgres service: `docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d postgres`.
+4. Run the built import CLI in a one-off app container:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.postgres.yml run --rm onefolder-web npm run persistence:import-json
+   ```
+
+   This reads JSON files from `/data/settings`, checks their digest, and writes them to Postgres. It refuses to import if the data is nonempty or the digest has changed from the previous import.
+
+5. Start the app: `docker compose -f docker-compose.yml -f docker-compose.postgres.yml up --build`.
+
+The import is idempotent: running it again on unchanged JSON does nothing. Do not modify JSON files during the migration process.
+
+For development, the source CLI script also works outside Docker:
+
+```bash
+npm run persistence:import-json:dev
+```
+
+#### Rollback / Export Runbook
+
+To switch back from Postgres to JSON:
+
+1. Stop the app: `docker compose -f docker-compose.yml -f docker-compose.postgres.yml down`.
+2. Start only the Postgres service (ensure DB is reachable): `docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d postgres`.
+3. Run the export CLI in a one-off app container with both Compose files, after explicitly starting the postgres service:
+
+    ```bash
+    docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d postgres
+    docker compose -f docker-compose.yml -f docker-compose.postgres.yml run --rm onefolder-web npm run persistence:export-json
+    ```
+
+    This exports Postgres data (settings, media index, saved searches) to JSON files under `/data/settings` (the default output directory). You can also specify an absolute path:
+
+    ```bash
+    docker compose -f docker-compose.yml -f docker-compose.postgres.yml run --rm onefolder-web npm run persistence:export-json /data/settings/custom-export
+    ```
+
+    > **Warning:** Relative paths and container-only paths (e.g., `./output`) will disappear under `--rm`. Use an absolute path like `/data/settings/...`.
+
+4. Back up your current JSON directory (`/data/settings`) to a timestamped archive.
+5. Copy the exported `settings.json`, `index.json`, and `saved-searches.json` into `/data/settings`.
+6. Set `PERSISTENCE_DRIVER=json` in the environment or remove the Postgres Compose override, then restart.
+
+The original pre-import JSON becomes stale after Postgres-side changes (settings edits, saved search creation, media index updates). A fresh export is needed whenever you plan to switch back.
+
+For development (using tsx source, not compiled):
+
+```bash
+npm run persistence:export-json:dev -- <output-dir>
+```
+
 ## Local Development
 
 ```bash

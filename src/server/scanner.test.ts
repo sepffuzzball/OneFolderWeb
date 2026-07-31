@@ -55,4 +55,14 @@ describe('scanner path helpers', () => {
       expect(mediaKindForExtension(extension)).toBe('file');
     }
   });
+
+  it('cancelScheduledScan clears rescanAfterCurrent', async () => {
+    const { scheduleLibraryScan, cancelScheduledScan, rescanAfterCurrent } = await import('./scanner.js');
+    // Schedule a scan (without triggering actual scan)
+    scheduleLibraryScan(100);
+    // Cancel it — this now always sets rescanAfterCurrent = false even if no timer is queued.
+    cancelScheduledScan();
+    // Verify the flag is cleared.
+    expect(rescanAfterCurrent).toBe(false);
+  });
 });
