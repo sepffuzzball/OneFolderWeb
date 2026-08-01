@@ -761,7 +761,7 @@ describe('Real PostgreSQL integration', () => {
         mediaIndexRepository: makeMockMediaIndexRepo(diffMediaIndex),
         savedSearchRepository: makeMockSavedSearchRepo(searches),
       }),
-    ).rejects.toThrow(/nonempty/);
+    ).rejects.toThrow(/Target app_settings already has/);
 
     // Verify DB remains unchanged: still 2 media items, not 1
     const loadedMediaAfter = await mediaRepo.load();
