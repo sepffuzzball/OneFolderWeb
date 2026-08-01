@@ -10,7 +10,7 @@
 import pg from 'pg';
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { AppSettings, MediaItem, SavedSearch } from '../../../shared/types.js';
 
 const TEST_DB_URL = process.env.TEST_DATABASE_URL;
@@ -768,61 +768,79 @@ describe('Real PostgreSQL integration', () => {
     expect(loadedMediaAfter.files.length).toBe(2);
 
     // Step 5: Injected failure after media replacement: prove app_settings/media/state/saved/import_runs remain empty
-    // First restore empty state
-    await settingsRepo.save({
-      libraries: [],
-      tagCatalog: [],
-      tagAliases: {},
-    });
-    await mediaRepo.save([]);
-    await savedRepo.delete('s1');
+    // First restore genuinely empty state via direct DELETEs in dependency-safe order
+    await pool.query('DELETE FROM import_runs');
+    await pool.query('DELETE FROM saved_searches');
+    await pool.query('DELETE FROM media_items');
+    await pool.query('DELETE FROM media_index_state');
+    await pool.query('DELETE FROM app_settings');
 
-    // Use a fake pool that simulates a failure after media replacement but before commit
-    let queryCount = 0;
-    const fakePool = new pg.Pool();
-    const fakeClient: any = {
+    // Acquire one real client from the pool for the wrapper
+    const realClient = await pool.connect();
+    let rollbackObserved = false;
+    let releaseObserved = false;
+
+    // Build a narrow Pool-like wrapper whose connect returns a proxy/decorator around the real client
+    const proxy = {
       query: async (text: string, params?: any[]) => {
-        queryCount++;
-        // Allow the first few queries to succeed, then throw after media replacement
-        if (queryCount <= 29) {
-          // Simulate: BEGIN, advisory lock, COUNT queries, settings INSERT, media staging, saved inserts
-          if (text.startsWith('SELECT pg_advisory_xact_lock')) {
-            return { rows: [] };
-          }
-          if (text.startsWith('SELECT COUNT(*)')) {
-            return { rows: [{ cnt: '0' }] };
-          }
-          if (text.includes('source_digest')) {
-            return { rows: [] };
-          }
-          return { rows: [], rowCount: 1 };
+        // Normalize SQL by trimming leading whitespace
+        const normalizedText = text.trimStart();
+        // Throw on INSERT INTO import_runs to simulate import failure
+        if (normalizedText.startsWith('INSERT INTO import_runs')) {
+          throw new Error('simulated import failure');
         }
-        throw new Error('simulated import failure');
+        // Track ROLLBACK
+        if (normalizedText === 'ROLLBACK') {
+          rollbackObserved = true;
+        }
+        // Delegate everything else to the real client
+        return realClient.query(text, params);
       },
-      release: () => {},
+      release: () => {
+        // Track release and delegate exactly once to the real client
+        if (!releaseObserved) {
+          releaseObserved = true;
+          realClient.release();
+        }
+      },
     };
-    vi.spyOn(fakePool, 'connect').mockResolvedValue(fakeClient as any);
+    const fakePool = { connect: async () => proxy } as any;
 
-    await expect(
-      importJsonIntoPostgres({
-        pool: fakePool,
-        settingsRepository: makeMockSettingsRepo(settings),
-        mediaIndexRepository: makeMockMediaIndexRepo(mediaIndex),
-        savedSearchRepository: makeMockSavedSearchRepo(searches),
-      }),
-    ).rejects.toThrow('simulated import failure');
+    // Guard: ensure release happens even if assertion fails
+    try {
+      await expect(
+        importJsonIntoPostgres({
+          pool: fakePool,
+          settingsRepository: makeMockSettingsRepo(settings),
+          mediaIndexRepository: makeMockMediaIndexRepo(mediaIndex),
+          savedSearchRepository: makeMockSavedSearchRepo(searches),
+        }),
+      ).rejects.toThrow('simulated import failure');
 
-    // Verify all tables remain empty
-    const settingsEmpty = await settingsRepo.load();
-    expect(settingsEmpty.libraries).toEqual([]);
-    const mediaEmpty = await mediaRepo.load();
-    expect(mediaEmpty.files).toEqual([]);
-    const searchesEmpty = await savedRepo.list();
-    expect(searchesEmpty).toEqual([]);
-    const importRunsEmpty = await pool.query(
-      'SELECT COUNT(*) AS cnt FROM import_runs',
-    );
-    expect(parseInt(importRunsEmpty.rows[0].cnt, 10)).toBe(0);
+      // Verify rollback and release occurred
+      expect(rollbackObserved).toBe(true);
+      expect(releaseObserved).toBe(true);
+    } finally {
+      // If the importer did not release, ensure the real client is released
+      if (!releaseObserved) {
+        realClient.release();
+      }
+    }
+
+    // Query the real pool directly after failure and assert row count exactly zero
+    const [appSettingsCount, mediaItemsCount, mediaIndexStateCount, savedSearchesCount, importRunsCount] = await Promise.all([
+      pool.query('SELECT COUNT(*) AS cnt FROM app_settings'),
+      pool.query('SELECT COUNT(*) AS cnt FROM media_items'),
+      pool.query('SELECT COUNT(*) AS cnt FROM media_index_state'),
+      pool.query('SELECT COUNT(*) AS cnt FROM saved_searches'),
+      pool.query('SELECT COUNT(*) AS cnt FROM import_runs'),
+    ]);
+
+    expect(parseInt(appSettingsCount.rows[0].cnt, 10)).toBe(0);
+    expect(parseInt(mediaItemsCount.rows[0].cnt, 10)).toBe(0);
+    expect(parseInt(mediaIndexStateCount.rows[0].cnt, 10)).toBe(0);
+    expect(parseInt(savedSearchesCount.rows[0].cnt, 10)).toBe(0);
+    expect(parseInt(importRunsCount.rows[0].cnt, 10)).toBe(0);
   });
 
   itIf(!!TEST_DB_URL)('export imports then exports and reloads exact values', async () => {
